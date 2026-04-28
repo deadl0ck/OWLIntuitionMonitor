@@ -2,11 +2,12 @@
 
 import smtplib
 import ssl
+from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 
 class EmailSender:
-    """Sends plain-text alert emails via Gmail using an App Password."""
+    """Sends alert emails via Gmail using an App Password."""
 
     def __init__(self, sender_email: str, gmail_app_password: str) -> None:
         """Store sender credentials for use when sending emails.
@@ -18,18 +19,32 @@ class EmailSender:
         self.sender_email = sender_email
         self.password = gmail_app_password
 
-    def send(self, receiver_email: str, subject: str, text: str) -> None:
-        """Send a plain-text email via Gmail SSL.
+    def send(self, receiver_email: str, subject: str, text: str,
+             html: str | None = None) -> None:
+        """Send an email via Gmail SSL, optionally with an HTML alternative.
+
+        When html is provided the message is sent as multipart/alternative so
+        email clients that support HTML render the rich version while others
+        fall back to the plain-text body.
 
         Args:
             receiver_email: Destination email address.
             subject: Email subject line.
-            text: Plain-text body of the email.
+            text: Plain-text body (always included).
+            html: Optional HTML body for rich-text clients.
         """
-        msg = MIMEText(text)
-        msg['Subject'] = subject
-        msg['From'] = self.sender_email
-        msg['To'] = receiver_email
+        if html:
+            msg: MIMEMultipart | MIMEText = MIMEMultipart('alternative')
+            msg['Subject'] = subject
+            msg['From'] = self.sender_email
+            msg['To'] = receiver_email
+            msg.attach(MIMEText(text, 'plain'))
+            msg.attach(MIMEText(html, 'html'))
+        else:
+            msg = MIMEText(text)
+            msg['Subject'] = subject
+            msg['From'] = self.sender_email
+            msg['To'] = receiver_email
 
         context = ssl.create_default_context()
         with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=context) as server:

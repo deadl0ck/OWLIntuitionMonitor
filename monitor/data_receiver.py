@@ -12,6 +12,98 @@ from monitor.treatment_cycle import TreatmentCycle
 
 logger = logging.getLogger(__name__)
 
+_LABEL_COLOURS = {
+    '14-night': ('#1a6eb5', '#e8f2fc'),
+    '5-night':  ('#1e8c45', '#e8f7ed'),
+    '3-night':  ('#7b3fbf', '#f3ecfc'),
+    'unexpected': ('#c0392b', '#fdecea'),
+}
+
+
+def _build_summary_text(week_start: 'date', week_end: 'date',
+                         tagged: list[tuple['datetime', float, str]]) -> str:
+    lines = [
+        f'Weekly pump activity: {week_start} to {week_end}',
+        '',
+        f'{"Date":<12} {"Time (UTC)":<12} {"Duration":>10}  {"Type"}',
+        '-' * 52,
+    ]
+    for dt, dur, label in tagged:
+        lines.append(
+            f'{dt.strftime("%Y-%m-%d"):<12} {dt.strftime("%H:%M"):<12} '
+            f'{dur:>8.1f} min  {label}'
+        )
+    if not tagged:
+        lines.append('No pump activity recorded.')
+    return '\n'.join(lines)
+
+
+def _build_summary_html(week_start: 'date', week_end: 'date',
+                         tagged: list[tuple['datetime', float, str]]) -> str:
+    rows_html = ''
+    for i, (dt, dur, label) in enumerate(tagged):
+        fg, bg = _LABEL_COLOURS.get(label, ('#555', '#f5f5f5'))
+        row_bg = '#ffffff' if i % 2 == 0 else '#f9f9f9'
+        badge = (
+            f'<span style="display:inline-block;padding:2px 9px;border-radius:12px;'
+            f'font-size:12px;font-weight:600;color:{fg};background:{bg};">'
+            f'{label}</span>'
+        )
+        rows_html += (
+            f'<tr style="background:{row_bg}">'
+            f'<td style="padding:8px 12px">{dt.strftime("%a %d %b %Y")}</td>'
+            f'<td style="padding:8px 12px;font-family:monospace">{dt.strftime("%H:%M")} UTC</td>'
+            f'<td style="padding:8px 12px;text-align:right">{dur:.1f} min</td>'
+            f'<td style="padding:8px 16px">{badge}</td>'
+            f'</tr>'
+        )
+
+    if not tagged:
+        rows_html = (
+            '<tr><td colspan="4" style="padding:16px 12px;color:#888;text-align:center">'
+            'No pump activity recorded.</td></tr>'
+        )
+
+    treatment_count = sum(1 for _, _, l in tagged if l != 'unexpected')
+    unexpected_count = sum(1 for _, _, l in tagged if l == 'unexpected')
+
+    return f"""<!DOCTYPE html>
+<html>
+<body style="margin:0;padding:0;background:#f0f2f5;font-family:Arial,sans-serif">
+<table width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;margin:24px auto">
+  <tr>
+    <td style="background:#1a2e4a;padding:24px 28px;border-radius:8px 8px 0 0">
+      <div style="font-size:10px;font-weight:700;letter-spacing:2px;color:#7fa8cc;text-transform:uppercase">Pumphouse Monitor</div>
+      <div style="font-size:22px;font-weight:700;color:#ffffff;margin-top:4px">Weekly Summary</div>
+      <div style="font-size:13px;color:#a0bcd4;margin-top:4px">{week_start.strftime("%-d %B")} – {week_end.strftime("%-d %B %Y")}</div>
+    </td>
+  </tr>
+  <tr>
+    <td style="background:#ffffff;padding:16px 0;border-left:1px solid #e0e0e0;border-right:1px solid #e0e0e0">
+      <table width="100%" cellpadding="0" cellspacing="0">
+        <tr style="background:#f0f2f5">
+          <th style="padding:8px 12px;text-align:left;font-size:11px;font-weight:700;color:#666;text-transform:uppercase;letter-spacing:1px">Date</th>
+          <th style="padding:8px 12px;text-align:left;font-size:11px;font-weight:700;color:#666;text-transform:uppercase;letter-spacing:1px">Time</th>
+          <th style="padding:8px 12px;text-align:right;font-size:11px;font-weight:700;color:#666;text-transform:uppercase;letter-spacing:1px">Duration</th>
+          <th style="padding:8px 16px;text-align:left;font-size:11px;font-weight:700;color:#666;text-transform:uppercase;letter-spacing:1px">Type</th>
+        </tr>
+        {rows_html}
+      </table>
+    </td>
+  </tr>
+  <tr>
+    <td style="background:#f8f9fa;padding:14px 28px;border:1px solid #e0e0e0;border-top:2px solid #e0e0e0;border-radius:0 0 8px 8px">
+      <span style="font-size:12px;color:#555">
+        <strong>{treatment_count}</strong> treatment run{'s' if treatment_count != 1 else ''}
+        &nbsp;·&nbsp;
+        <strong>{unexpected_count}</strong> unexpected run{'s' if unexpected_count != 1 else ''}
+      </span>
+    </td>
+  </tr>
+</table>
+</body>
+</html>"""
+
 
 class DataReceiver:
     """Joins the OWL Intuition multicast group and processes incoming power readings."""
@@ -209,41 +301,26 @@ class DataReceiver:
     def _send_weekly_summary(self, today: date) -> None:
         """Build and send a weekly summary of all pump runs from the previous 7 days."""
         week_start = today - timedelta(days=7)
+        week_end = today - timedelta(days=1)
         start_ts = int(datetime(week_start.year, week_start.month, week_start.day,
                                 tzinfo=timezone.utc).timestamp())
         end_ts = int(datetime(today.year, today.month, today.day,
                               tzinfo=timezone.utc).timestamp())
 
         rows = self.db.get_runs_between(start_ts, end_ts)
-
-        lines = [
-            f'Weekly pump activity: {week_start} to {today - timedelta(days=1)}',
-            '',
-            f'{"Date":<12} {"Time (UTC)":<12} {"Duration":>10}  {"Type"}',
-            '-' * 52,
-        ]
-
+        tagged = []
         for ts, dur in rows:
             dt = datetime.fromtimestamp(ts, tz=timezone.utc)
-            run_date = dt.strftime('%Y-%m-%d')
-            run_time = dt.strftime('%H:%M')
-            run_hour = dt.hour
             label = next(
-                (c.label for c in self.cycles if c.covers_hour(run_hour)),
-                'unexpected'
+                (c.label for c in self.cycles if c.covers_hour(dt.hour)), 'unexpected'
             )
-            lines.append(f'{run_date:<12} {run_time:<12} {dur:>8.1f} min  {label}')
+            tagged.append((dt, dur, label))
 
-        if not rows:
-            lines.append('No pump activity recorded.')
-
-        body = '\n'.join(lines)
-        self.email.send(
-            self.email_receiver,
-            f'PUMPHOUSE: Weekly summary ({week_start} to {today - timedelta(days=1)})',
-            body,
-        )
-        logger.info(f'Weekly summary sent for {week_start} to {today - timedelta(days=1)}')
+        subject = f'PUMPHOUSE: Weekly summary ({week_start} to {week_end})'
+        text = _build_summary_text(week_start, week_end, tagged)
+        html = _build_summary_html(week_start, week_end, tagged)
+        self.email.send(self.email_receiver, subject, text, html=html)
+        logger.info(f'Weekly summary sent for {week_start} to {week_end}')
 
     def receive_data(self) -> None:
         """Block forever, receiving and processing UDP multicast readings.
