@@ -1,3 +1,9 @@
+"""Entry point for the OWL Intuition pumphouse monitor.
+
+Loads configuration from .env (secrets) and config.ini (settings), then starts
+the UDP multicast listener which records readings and sends Gmail alerts.
+"""
+
 import configparser
 import os
 from dotenv import load_dotenv

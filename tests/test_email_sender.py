@@ -1,21 +1,26 @@
+"""Tests for monitor.email_sender — covers SMTP connection, login and message formatting."""
+
 import pytest
 from unittest.mock import patch, MagicMock, ANY
 from monitor.email_sender import EmailSender
 
 
 @pytest.fixture
-def sender():
+def sender() -> EmailSender:
+    """Return an EmailSender configured with test credentials."""
     return EmailSender("sender@gmail.com", "test_password")
 
 
-def test_connects_to_gmail_ssl(sender):
+def test_connects_to_gmail_ssl(sender: EmailSender) -> None:
+    """Verify that the SMTP connection targets smtp.gmail.com on port 465."""
     with patch("smtplib.SMTP_SSL") as mock_smtp:
         mock_smtp.return_value.__enter__.return_value = MagicMock()
         sender.send("recv@gmail.com", "Subject", "Body")
         mock_smtp.assert_called_once_with("smtp.gmail.com", 465, context=ANY)
 
 
-def test_logs_in_with_sender_credentials(sender):
+def test_logs_in_with_sender_credentials(sender: EmailSender) -> None:
+    """Verify that login is called with the sender address and app password."""
     with patch("smtplib.SMTP_SSL") as mock_smtp:
         mock_server = MagicMock()
         mock_smtp.return_value.__enter__.return_value = mock_server
@@ -23,7 +28,8 @@ def test_logs_in_with_sender_credentials(sender):
         mock_server.login.assert_called_once_with("sender@gmail.com", "test_password")
 
 
-def test_message_has_correct_subject(sender):
+def test_message_has_correct_subject(sender: EmailSender) -> None:
+    """Verify that the Subject header matches the value passed to send()."""
     with patch("smtplib.SMTP_SSL") as mock_smtp:
         mock_server = MagicMock()
         mock_smtp.return_value.__enter__.return_value = mock_server
@@ -32,7 +38,8 @@ def test_message_has_correct_subject(sender):
         assert msg["Subject"] == "Test Subject"
 
 
-def test_message_has_correct_from_and_to(sender):
+def test_message_has_correct_from_and_to(sender: EmailSender) -> None:
+    """Verify that From and To headers are set to the sender and receiver addresses."""
     with patch("smtplib.SMTP_SSL") as mock_smtp:
         mock_server = MagicMock()
         mock_smtp.return_value.__enter__.return_value = mock_server
@@ -42,7 +49,8 @@ def test_message_has_correct_from_and_to(sender):
         assert msg["To"] == "recv@gmail.com"
 
 
-def test_message_body_is_included(sender):
+def test_message_body_is_included(sender: EmailSender) -> None:
+    """Verify that the email body matches the text passed to send()."""
     with patch("smtplib.SMTP_SSL") as mock_smtp:
         mock_server = MagicMock()
         mock_smtp.return_value.__enter__.return_value = mock_server
