@@ -43,6 +43,41 @@ The OWL Intuition device broadcasts power readings as XML over UDP multicast. Th
 
 ---
 
+## Directory structure
+
+```
+OWLIntuitionMonitor/
+├── main.py               # Entry point — loads config and starts the receiver
+├── config.ini            # Application settings (port, email, threshold)
+├── .env.example          # Template for secrets — copy to .env and fill in
+├── requirements.txt      # Python dependencies
+│
+├── monitor/              # Core application package
+│   ├── database.py       # SQLite interface (creates table, inserts readings)
+│   ├── data_receiver.py  # UDP multicast listener and pump state machine
+│   └── email_sender.py   # Gmail alert dispatcher
+│
+├── scripts/              # Shell scripts for managing the monitor process
+│   ├── monitor_pumphouse.sh   # Start the monitor in the background
+│   ├── restart_monitor.sh     # Kill any running instance and restart
+│   ├── show_monitor_process.sh  # Check whether the monitor is running
+│   ├── show_last_20_rows.sh   # Print the last 20 database rows
+│   └── show_pump_on.sh        # Print rows where the pump was active
+│
+├── sql/                  # SQL queries used by the shell scripts above
+│   ├── last_20_rows.sql
+│   ├── pump_on.sql
+│   ├── show_today.sql
+│   └── today.sql
+│
+└── tests/                # pytest unit tests (no network or hardware required)
+    ├── test_database.py
+    ├── test_data_receiver.py
+    └── test_email_sender.py
+```
+
+---
+
 ## Setup
 
 ### 1. Python version
@@ -99,13 +134,13 @@ Edit `config.ini` directly. These values are not secret and can be committed to 
 python3 main.py
 
 # Background — logs to pumphouse_monitor.log
-./monitor_pumphouse.sh
+./scripts/monitor_pumphouse.sh
 
 # Restart a running instance
-./restart_monitor.sh
+./scripts/restart_monitor.sh
 
 # Check if the monitor is running
-./show_monitor_process.sh
+./scripts/show_monitor_process.sh
 ```
 
 ---
