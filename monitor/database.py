@@ -48,8 +48,11 @@ class Database:
                                     min_duration: float) -> date | None:
         """Return the most recent UTC date on which a qualifying run ended in the given hour window.
 
-        A qualifying run is one where the pump turned off (PUMP_ON=0) with DURATION >= min_duration,
-        and the reading falls within the given UTC hour window.
+        Only counts ON→OFF transitions (the row where the pump first goes to PUMP_ON=0 after
+        being on). At that row, DURATION equals the actual run length. Subsequent off-state
+        rows have a growing "time since off" duration and are excluded by the LAG filter.
+
+        Searches the last 30 days, which is sufficient to seed any cycle up to 14 nights.
 
         Args:
             start_hour: UTC hour window start (inclusive).
@@ -62,8 +65,14 @@ class Database:
         cur = self.connection.execute(
             """
             SELECT MAX(UNIX_TIMESTAMP)
-            FROM PH_DATA
+            FROM (
+                SELECT UNIX_TIMESTAMP, TIMESTAMP, DURATION, PUMP_ON,
+                       LAG(PUMP_ON, 1, 0) OVER (ORDER BY UNIX_TIMESTAMP) AS prev_pump_on
+                FROM PH_DATA
+                WHERE UNIX_TIMESTAMP >= (SELECT MAX(UNIX_TIMESTAMP) FROM PH_DATA) - 30 * 86400
+            )
             WHERE PUMP_ON = 0
+              AND prev_pump_on = 1
               AND DURATION >= ?
               AND CAST(strftime('%H', TIMESTAMP) AS INTEGER) >= ?
               AND CAST(strftime('%H', TIMESTAMP) AS INTEGER) < ?
@@ -75,15 +84,18 @@ class Database:
             return None
         return datetime.fromtimestamp(row[0], tz=timezone.utc).date()
 
-    def get_runs_between(self, start_ts: int, end_ts: int) -> list[tuple[int, float]]:
-        """Return all pump-off rows with positive duration in a timestamp range.
+    def get_runs_between(self, start_ts: int, end_ts: int,
+                         min_duration: float = 3.0) -> list[tuple[int, float]]:
+        """Return completed pump runs (ON→OFF transitions) above a minimum duration.
 
-        Each row represents the end of a pump-on period. Returns (unix_timestamp, duration)
-        pairs for rows where PUMP_ON=0 and DURATION > 0.
+        Each returned row is the moment the pump turned off; DURATION at that point equals
+        the actual run length. Uses LAG to exclude the continuous stream of off-state readings
+        that follow each transition. Filters out brief micro-cycles below min_duration.
 
         Args:
             start_ts: Range start as Unix timestamp (inclusive).
             end_ts: Range end as Unix timestamp (exclusive).
+            min_duration: Minimum run length in minutes to include (default: 3).
 
         Returns:
             List of (unix_timestamp, duration_minutes) tuples ordered by timestamp.
@@ -91,13 +103,15 @@ class Database:
         cur = self.connection.execute(
             """
             SELECT UNIX_TIMESTAMP, DURATION
-            FROM PH_DATA
-            WHERE PUMP_ON = 0
-              AND DURATION > 0
-              AND UNIX_TIMESTAMP >= ?
-              AND UNIX_TIMESTAMP < ?
+            FROM (
+                SELECT UNIX_TIMESTAMP, DURATION, PUMP_ON,
+                       LAG(PUMP_ON, 1, 0) OVER (ORDER BY UNIX_TIMESTAMP) AS prev_pump_on
+                FROM PH_DATA
+                WHERE UNIX_TIMESTAMP >= ? AND UNIX_TIMESTAMP < ?
+            )
+            WHERE PUMP_ON = 0 AND prev_pump_on = 1 AND DURATION >= ?
             ORDER BY UNIX_TIMESTAMP
             """,
-            (start_ts, end_ts),
+            (start_ts, end_ts, min_duration),
         )
         return cur.fetchall()
