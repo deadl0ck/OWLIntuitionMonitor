@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import patch, MagicMock, ANY
-from email_sender import EmailSender
+from monitor.email_sender import EmailSender
 
 
 @pytest.fixture

@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import patch, MagicMock
-from data_receiver import DataReceiver
+from monitor.data_receiver import DataReceiver
 
 # Minimal XML that matches what the OWL Intuition device broadcasts
 HIGH_WATTS_XML = (

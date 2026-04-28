@@ -1,5 +1,5 @@
 import pytest
-from database import Database
+from monitor.database import Database
 
 
 @pytest.fixture

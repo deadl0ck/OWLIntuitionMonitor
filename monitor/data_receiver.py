@@ -3,8 +3,8 @@ import struct
 from bs4 import BeautifulSoup
 from datetime import datetime, timezone
 import time
-from email_sender import EmailSender
-from database import Database
+from monitor.email_sender import EmailSender
+from monitor.database import Database
 import sys
 
 NUM_PROGRESS_DOTS_PER_LINE = 80

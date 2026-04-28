@@ -1,9 +1,9 @@
 import configparser
 import os
 from dotenv import load_dotenv
-from email_sender import EmailSender
-from database import Database
-from data_receiver import DataReceiver
+from monitor.email_sender import EmailSender
+from monitor.database import Database
+from monitor.data_receiver import DataReceiver
 
 load_dotenv()
 
