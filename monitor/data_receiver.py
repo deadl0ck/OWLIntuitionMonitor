@@ -1,5 +1,6 @@
 """UDP multicast listener that receives, parses and processes OWL Intuition power readings."""
 
+import logging
 import socket
 import struct
 from bs4 import BeautifulSoup
@@ -7,9 +8,8 @@ from datetime import datetime, timezone
 import time
 from monitor.email_sender import EmailSender
 from monitor.database import Database
-import sys
 
-NUM_PROGRESS_DOTS_PER_LINE = 80
+logger = logging.getLogger(__name__)
 
 
 class DataReceiver:
@@ -21,6 +21,7 @@ class DataReceiver:
                  email: EmailSender,
                  email_receiver: str,
                  alarm_threshold: int,
+                 pump_threshold_watts: float,
                  db: Database) -> None:
         """Bind a UDP socket and join the multicast group.
 
@@ -30,6 +31,7 @@ class DataReceiver:
             email: EmailSender instance used to dispatch alerts.
             email_receiver: Address that alert emails are sent to.
             alarm_threshold: Minutes of continuous pump activity before alerting.
+            pump_threshold_watts: Watts above which the pump is considered on.
             db: Database instance for persisting readings.
         """
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -40,12 +42,14 @@ class DataReceiver:
 
         self.email = email
         self.alarm_threshold = alarm_threshold
+        self.pump_threshold_watts = pump_threshold_watts
         self.db = db
         self.email_receiver = email_receiver
 
         self._pump_on = False
         self._pump_state_change_ts: float = time.time()
         self._email_sent_for_current_run = False
+        self._first_reading = True
 
     def _parse_reading(self, xml: str) -> tuple[int, float] | None:
         """Parse an OWL Intuition XML broadcast into a timestamp and wattage.
@@ -60,19 +64,20 @@ class DataReceiver:
         soup = BeautifulSoup(xml, "lxml")
         if soup.electricity is None or soup.electricity.timestamp is None:
             return None
-        if soup.electricity.find("chan") is None:
-            print(f'Missing chan element: {xml}')
+        chan = soup.electricity.find("chan")
+        if chan is None:
+            logger.warning('Missing chan element in received packet')
             return None
         ts = int(soup.electricity.timestamp.text)
-        watts = float(soup.electricity.find("chan").curr.text)
+        watts = float(chan.curr.text)
         return ts, watts
 
     def _process_reading(self, unix_ts: int, watts: float) -> None:
         """Update pump state, persist the reading and send alerts when needed.
 
-        Detects on/off transitions by comparing current watts against the 1000 W
-        threshold. Sends an in-progress alert when the pump exceeds the alarm
-        threshold and a completion alert when a long run finishes.
+        Detects on/off transitions by comparing current watts against
+        pump_threshold_watts. Sends an in-progress alert when the pump exceeds
+        the alarm threshold and a completion alert when a long run finishes.
 
         Args:
             unix_ts: Reading time as a Unix timestamp.
@@ -80,7 +85,7 @@ class DataReceiver:
         """
         date_time = datetime.fromtimestamp(unix_ts, tz=timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
         pump_already_on = self._pump_on
-        self._pump_on = watts > 1000.0
+        self._pump_on = watts > self.pump_threshold_watts
         pump_off = not self._pump_on
         duration = (unix_ts - self._pump_state_change_ts) / 60
 
@@ -91,11 +96,20 @@ class DataReceiver:
 
         if self._pump_on and not pump_already_on:
             self._pump_state_change_ts = unix_ts
-            print("\nPump has just started")
+            if self._first_reading:
+                logger.warning(
+                    'Pump appears to already be running at monitor start — '
+                    'duration will be measured from now, not actual pump start'
+                )
+            else:
+                logger.info('Pump has just started')
+            self._first_reading = False
             return
 
+        self._first_reading = False
+
         if pump_off and pump_already_on:
-            print(f'\nPump has just finished - it was running for {duration:.1f} minutes')
+            logger.info(f'Pump has just finished — ran for {duration:.1f} minutes')
             if duration > self.alarm_threshold:
                 self.email.send(self.email_receiver,
                                 f'PUMPHOUSE: {duration:.1f} minute(s) run finished',
@@ -108,30 +122,26 @@ class DataReceiver:
                             f'PUMPHOUSE: Running over {self.alarm_threshold} minute(s)',
                             f'Pump running for over threshold duration of {self.alarm_threshold} minute(s)')
             self._email_sent_for_current_run = True
+            logger.info(f'Pump over threshold — alert sent after {duration:.1f} minutes')
 
     def receive_data(self) -> None:
         """Block forever, receiving and processing UDP multicast readings.
 
-        Sends a startup email on entry, then loops continuously — each received
-        packet is parsed and passed to _process_reading. Progress dots are
-        printed to stdout so it is easy to confirm the monitor is alive.
+        Sends a startup email on entry, then loops continuously. Each received
+        packet is parsed and passed to _process_reading. Exceptions within the
+        loop are logged and swallowed so the monitor never stops due to a
+        transient error.
         """
-        message = f'Pumphouse monitoring starting - alarm threshold is {self.alarm_threshold} minute(s)'
-        print(message)
-        self.email.send(self.email_receiver, "PUMPHOUSE: Monitor Starting", message)
+        message = f'Pumphouse monitoring starting — alarm threshold is {self.alarm_threshold} minute(s)'
+        logger.info(message)
+        self.email.send(self.email_receiver, 'PUMPHOUSE: Monitor Starting', message)
 
-        dot_count = 0
         while True:
-            enc_data, _ = self.sock.recvfrom(1024)
-            reading = self._parse_reading(enc_data.decode("utf-8"))
-            if reading is None:
-                continue
-
-            self._process_reading(*reading)
-
-            if dot_count == NUM_PROGRESS_DOTS_PER_LINE:
-                print("")
-                dot_count = 0
-            dot_count += 1
-            sys.stdout.write(".")
-            sys.stdout.flush()
+            try:
+                enc_data, _ = self.sock.recvfrom(4096)
+                reading = self._parse_reading(enc_data.decode('utf-8'))
+                if reading is None:
+                    continue
+                self._process_reading(*reading)
+            except Exception:
+                logger.exception('Unexpected error processing reading — continuing')

@@ -5,11 +5,18 @@ the UDP multicast listener which records readings and sends Gmail alerts.
 """
 
 import configparser
+import logging
 import os
 from dotenv import load_dotenv
 from monitor.email_sender import EmailSender
 from monitor.database import Database
 from monitor.data_receiver import DataReceiver
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s %(levelname)-8s %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+)
 
 load_dotenv()
 
@@ -23,6 +30,7 @@ DB_FILENAME = config.get('database', 'filename')
 EMAIL_SENDER = config.get('email', 'sender')
 EMAIL_RECEIVER = config.get('email', 'receiver')
 ALARM_THRESHOLD = config.getint('monitor', 'alarm_threshold_minutes')
+PUMP_THRESHOLD_WATTS = config.getfloat('monitor', 'pump_threshold_watts')
 
 db = Database(DB_FILENAME)
 email = EmailSender(EMAIL_SENDER, GMAIL_APP_PASSWORD)
@@ -31,6 +39,7 @@ receiver = DataReceiver(MULTICAST_GROUP,
                         email,
                         EMAIL_RECEIVER,
                         ALARM_THRESHOLD,
+                        PUMP_THRESHOLD_WATTS,
                         db)
 
 receiver.receive_data()

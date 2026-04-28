@@ -11,6 +11,7 @@ Listens for UDP multicast data from an OWL Intuition power monitor and tracks el
 - [Directory structure](#directory-structure)
 - [Setup](#setup)
 - [Running](#running)
+- [Logging](#logging)
 - [Testing](#testing)
 - [Database](#database)
 
@@ -35,7 +36,7 @@ cp .env.example .env
 # Edit .env and fill in GMAIL_APP_PASSWORD and MULTICAST_GROUP
 
 # 5. Configure application settings
-# Edit config.ini — set your email addresses, threshold, etc.
+# Edit config.ini — set your email addresses, thresholds, etc.
 
 # 6. Run
 python3 main.py
@@ -47,11 +48,12 @@ python3 main.py
 
 The OWL Intuition device broadcasts power readings as XML over UDP multicast. This tool:
 - Joins the multicast group and receives readings continuously
-- Detects when power on the monitored channel crosses 1000 W (pump on/off)
+- Detects when power on the monitored channel crosses `pump_threshold_watts` (pump on/off)
 - Records every reading to a SQLite database
 - Emails an alert if the pump runs longer than `alarm_threshold_minutes`
 - Emails again when a long run finishes, reporting the total duration
 - Sends a startup confirmation email when the monitor begins
+- Logs a warning if the pump appears to already be running when monitoring starts
 
 ---
 
@@ -60,7 +62,7 @@ The OWL Intuition device broadcasts power readings as XML over UDP multicast. Th
 ```
 OWLIntuitionMonitor/
 ├── main.py               # Entry point — loads config and starts the receiver
-├── config.ini            # Application settings (port, email, threshold)
+├── config.ini            # Application settings (port, email, thresholds)
 ├── .env.example          # Template for secrets — copy to .env and fill in
 ├── requirements.txt      # Python dependencies
 │
@@ -131,21 +133,22 @@ Edit `config.ini` directly. These values are not secret and can be committed to 
 
 | Setting | Description |
 |---|---|
-| `[network] multicast_port` | OWL Intuition multicast port (default: `22600`) |
+| `[network] multicast_port` | UDP port the OWL device broadcasts on (default: `22600`) |
 | `[database] filename` | SQLite database file path |
 | `[email] sender` | Gmail address used to send alerts |
 | `[email] receiver` | Email address to receive alerts |
-| `[monitor] alarm_threshold_minutes` | Minutes of continuous high usage before alerting |
+| `[monitor] alarm_threshold_minutes` | Minutes of continuous pump activity before an alert is sent |
+| `[monitor] pump_threshold_watts` | Watts above which the pump is considered on (default: `1000`) |
 
 ---
 
 ## Running
 
 ```bash
-# Foreground (output to terminal)
+# Foreground — log output goes to the terminal
 python3 main.py
 
-# Background — logs to pumphouse_monitor.log
+# Background — log output goes to pumphouse_monitor.log
 ./scripts/monitor_pumphouse.sh
 
 # Restart a running instance
@@ -154,6 +157,31 @@ python3 main.py
 # Check if the monitor is running
 ./scripts/show_monitor_process.sh
 ```
+
+Both shell scripts will exit with an error if `.env` is not found rather than starting with missing credentials.
+
+---
+
+## Logging
+
+The monitor uses Python's standard `logging` module. All output is timestamped:
+
+```
+2024-02-19 10:23:01 INFO     Pumphouse monitoring starting — alarm threshold is 7 minute(s)
+2024-02-19 10:31:45 INFO     Pump has just started
+2024-02-19 10:39:12 INFO     Pump over threshold — alert sent after 7.4 minutes
+2024-02-19 10:45:30 INFO     Pump has just finished — ran for 13.7 minutes
+2024-02-19 11:02:00 WARNING  Pump appears to already be running at monitor start — duration will be measured from now
+2024-02-19 11:05:03 ERROR    Unexpected error processing reading — continuing
+```
+
+When running in the background via the shell scripts, all output is written to `pumphouse_monitor.log` in the project root. The log file is overwritten each time the monitor starts.
+
+| Level | When it appears |
+|---|---|
+| `INFO` | Startup, pump on/off transitions, alert emails sent |
+| `WARNING` | Pump already running at startup, malformed packets |
+| `ERROR` | Unexpected exceptions (monitor continues running) |
 
 ---
 
@@ -172,7 +200,7 @@ The test suite covers:
 |---|---|
 | `tests/test_database.py` | Table creation, inserts, bool→int conversion, autoincrement IDs |
 | `tests/test_email_sender.py` | SMTP connection, login credentials, message headers and body |
-| `tests/test_data_receiver.py` | XML parsing (valid and malformed), pump state machine, threshold alerting, email deduplication |
+| `tests/test_data_receiver.py` | XML parsing (valid and malformed), pump state machine, threshold alerting, email deduplication, startup behaviour, exception recovery |
 
 `DataReceiver` is tested without a real network socket — the socket is mocked so tests run offline and instantly.
 
@@ -188,12 +216,12 @@ Readings are stored in `PH_DATA` in the configured SQLite file:
 | `UNIX_TIMESTAMP` | INTEGER | Reading time as Unix timestamp |
 | `TIMESTAMP` | TEXT | Reading time as `YYYY-MM-DD HH:MM:SS` (UTC) |
 | `WATTS` | REAL | Power reading in watts |
-| `PUMP_ON` | INTEGER | `1` if pump was on (>1000 W), `0` otherwise |
+| `PUMP_ON` | INTEGER | `1` if pump was on (above threshold), `0` otherwise |
 | `DURATION` | REAL | Minutes since last pump state change |
 
 Included SQL helpers:
 
 ```bash
-./show_last_20_rows.sh   # Last 20 readings
-./show_pump_on.sh        # Readings where pump was on
+./scripts/show_last_20_rows.sh   # Last 20 readings
+./scripts/show_pump_on.sh        # Readings where pump was on
 ```

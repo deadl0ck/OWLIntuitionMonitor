@@ -36,6 +36,7 @@ def receiver() -> DataReceiver:
             email=MagicMock(),
             email_receiver="recv@test.com",
             alarm_threshold=5,
+            pump_threshold_watts=1000.0,
             db=MagicMock(),
         )
         return r
@@ -91,11 +92,29 @@ def test_pump_start_is_written_to_database(receiver: DataReceiver) -> None:
     receiver.db.insert_reading.assert_called_once()
 
 
+def test_pump_already_on_at_startup_logs_warning(receiver: DataReceiver, caplog) -> None:
+    """Verify that a warning is logged when the pump appears to be running at monitor start."""
+    receiver._pump_on = False
+    receiver._first_reading = True
+    with caplog.at_level('WARNING'):
+        receiver._process_reading(1700000000, 1500.0)
+    assert 'already be running at monitor start' in caplog.text
+
+
+def test_pump_already_on_at_startup_does_not_send_email(receiver: DataReceiver) -> None:
+    """Verify that detecting pump-on on the first reading does not send an alert."""
+    receiver._pump_on = False
+    receiver._first_reading = True
+    receiver._process_reading(1700000000, 1500.0)
+    receiver.email.send.assert_not_called()
+
+
 # --- _process_reading: pump running ---
 
 def test_pump_under_threshold_no_email(receiver: DataReceiver) -> None:
     """Verify that no alert is sent while the pump is running under the threshold."""
     receiver._pump_on = True
+    receiver._first_reading = False
     receiver._pump_state_change_ts = 1700000000 - (3 * 60)  # 3 min, threshold is 5
     receiver._process_reading(1700000000, 1500.0)
     receiver.email.send.assert_not_called()
@@ -104,6 +123,7 @@ def test_pump_under_threshold_no_email(receiver: DataReceiver) -> None:
 def test_pump_over_threshold_sends_alert_email(receiver: DataReceiver) -> None:
     """Verify that an alert email is sent when the pump exceeds the threshold."""
     receiver._pump_on = True
+    receiver._first_reading = False
     receiver._pump_state_change_ts = 1700000000 - (6 * 60)  # 6 min, threshold is 5
     receiver._process_reading(1700000000, 1500.0)
     receiver.email.send.assert_called_once()
@@ -113,6 +133,7 @@ def test_pump_over_threshold_sends_alert_email(receiver: DataReceiver) -> None:
 def test_threshold_alert_sent_only_once_per_run(receiver: DataReceiver) -> None:
     """Verify that the threshold alert is not repeated on subsequent readings in the same run."""
     receiver._pump_on = True
+    receiver._first_reading = False
     receiver._pump_state_change_ts = 1700000000 - (6 * 60)
     receiver._process_reading(1700000000, 1500.0)   # triggers alert
     receiver._process_reading(1700000030, 1500.0)   # same run, 30 s later
@@ -124,6 +145,7 @@ def test_threshold_alert_sent_only_once_per_run(receiver: DataReceiver) -> None:
 def test_pump_stop_after_long_run_sends_completion_email(receiver: DataReceiver) -> None:
     """Verify that a completion email is sent when a run exceeding the threshold finishes."""
     receiver._pump_on = True
+    receiver._first_reading = False
     receiver._pump_state_change_ts = 1700000000 - (6 * 60)  # 6 min run
     receiver._process_reading(1700000000, 200.0)    # watts drop → pump off
     receiver.email.send.assert_called_once()
@@ -133,6 +155,7 @@ def test_pump_stop_after_long_run_sends_completion_email(receiver: DataReceiver)
 def test_pump_stop_after_short_run_no_email(receiver: DataReceiver) -> None:
     """Verify that no email is sent when a short run finishes under the threshold."""
     receiver._pump_on = True
+    receiver._first_reading = False
     receiver._pump_state_change_ts = 1700000000 - (2 * 60)  # 2 min run
     receiver._process_reading(1700000000, 200.0)
     receiver.email.send.assert_not_called()
@@ -141,6 +164,7 @@ def test_pump_stop_after_short_run_no_email(receiver: DataReceiver) -> None:
 def test_pump_stop_resets_email_flag(receiver: DataReceiver) -> None:
     """Verify that the email-sent flag is cleared when the pump stops."""
     receiver._pump_on = True
+    receiver._first_reading = False
     receiver._email_sent_for_current_run = True
     receiver._pump_state_change_ts = 1700000000 - 60
     receiver._process_reading(1700000000, 200.0)    # pump off
@@ -150,6 +174,28 @@ def test_pump_stop_resets_email_flag(receiver: DataReceiver) -> None:
 def test_pump_stop_updates_state_change_timestamp(receiver: DataReceiver) -> None:
     """Verify that the state-change timestamp is updated when the pump stops."""
     receiver._pump_on = True
+    receiver._first_reading = False
     receiver._pump_state_change_ts = 1700000000 - 60
     receiver._process_reading(1700000000, 200.0)
     assert receiver._pump_state_change_ts == 1700000000
+
+
+# --- receive_data ---
+
+def test_receive_data_sends_startup_email(receiver: DataReceiver) -> None:
+    """Verify that a startup notification email is sent before the receive loop begins."""
+    receiver.sock.recvfrom.side_effect = KeyboardInterrupt()
+    with pytest.raises(KeyboardInterrupt):
+        receiver.receive_data()
+    receiver.email.send.assert_called_once()
+    assert receiver.email.send.call_args[0][1] == 'PUMPHOUSE: Monitor Starting'
+
+
+def test_receive_data_continues_after_exception(receiver: DataReceiver) -> None:
+    """Verify that a transient error inside the loop is swallowed and the loop keeps running."""
+    receiver.sock.recvfrom.side_effect = [
+        Exception("transient socket error"),
+        KeyboardInterrupt(),
+    ]
+    with pytest.raises(KeyboardInterrupt):
+        receiver.receive_data()
