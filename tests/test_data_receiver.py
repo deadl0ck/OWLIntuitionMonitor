@@ -1,8 +1,10 @@
 """Tests for monitor.data_receiver — covers XML parsing and the pump state machine."""
 
 import pytest
-from unittest.mock import patch, MagicMock
+from datetime import date
+from unittest.mock import patch, MagicMock, call
 from monitor.data_receiver import DataReceiver
+from monitor.treatment_cycle import TreatmentCycle
 
 # Minimal XML samples that match the OWL Intuition broadcast format
 HIGH_WATTS_XML = (
@@ -26,6 +28,18 @@ NO_TIMESTAMP_XML = (
 NO_CHAN_XML = '<electricity id="443719D3"><timestamp>1700000000</timestamp></electricity>'
 
 
+def _make_cycle(label: str = 'test', interval: int = 5, start_h: int = 2,
+                end_h: int = 4, min_dur: float = 3.0,
+                last_run: date | None = None) -> TreatmentCycle:
+    c = TreatmentCycle(
+        label=label, interval_days=interval,
+        utc_start_hour=start_h, utc_end_hour=end_h,
+        min_duration_minutes=min_dur,
+    )
+    c.last_run_date = last_run
+    return c
+
+
 @pytest.fixture
 def receiver() -> DataReceiver:
     """Return a DataReceiver with a mocked socket and dummy email/db dependencies."""
@@ -35,9 +49,12 @@ def receiver() -> DataReceiver:
             port=22600,
             email=MagicMock(),
             email_receiver="recv@test.com",
-            alarm_threshold=5,
             pump_threshold_watts=1000.0,
             db=MagicMock(),
+            cycles=[],
+            summary_day=0,
+            summary_hour_utc=7,
+            unexpected_alert_threshold=7.0,
         )
         return r
 
@@ -111,64 +128,28 @@ def test_pump_already_on_at_startup_does_not_send_email(receiver: DataReceiver) 
 
 # --- _process_reading: pump running ---
 
-def test_pump_under_threshold_no_email(receiver: DataReceiver) -> None:
-    """Verify that no alert is sent while the pump is running under the threshold."""
+def test_pump_running_no_email(receiver: DataReceiver) -> None:
+    """Verify that no email is sent while the pump continues to run."""
     receiver._pump_on = True
     receiver._first_reading = False
-    receiver._pump_state_change_ts = 1700000000 - (3 * 60)  # 3 min, threshold is 5
+    receiver._pump_state_change_ts = 1700000000 - (30 * 60)  # 30 min run
     receiver._process_reading(1700000000, 1500.0)
     receiver.email.send.assert_not_called()
-
-
-def test_pump_over_threshold_sends_alert_email(receiver: DataReceiver) -> None:
-    """Verify that an alert email is sent when the pump exceeds the threshold."""
-    receiver._pump_on = True
-    receiver._first_reading = False
-    receiver._pump_state_change_ts = 1700000000 - (6 * 60)  # 6 min, threshold is 5
-    receiver._process_reading(1700000000, 1500.0)
-    receiver.email.send.assert_called_once()
-    assert 'Running over 5' in receiver.email.send.call_args[0][1]
-
-
-def test_threshold_alert_sent_only_once_per_run(receiver: DataReceiver) -> None:
-    """Verify that the threshold alert is not repeated on subsequent readings in the same run."""
-    receiver._pump_on = True
-    receiver._first_reading = False
-    receiver._pump_state_change_ts = 1700000000 - (6 * 60)
-    receiver._process_reading(1700000000, 1500.0)   # triggers alert
-    receiver._process_reading(1700000030, 1500.0)   # same run, 30 s later
-    assert receiver.email.send.call_count == 1
 
 
 # --- _process_reading: pump stop ---
 
-def test_pump_stop_after_long_run_sends_completion_email(receiver: DataReceiver) -> None:
-    """Verify that a completion email is sent when a run exceeding the threshold finishes."""
+def test_pump_stop_in_treatment_window_does_not_send_email(receiver: DataReceiver) -> None:
+    """Verify that no email is sent when a pump run ends within a treatment window."""
+    from datetime import datetime, timezone
+    cycle = _make_cycle(label='3-night', interval=3, start_h=4, end_h=5, min_dur=8.0)
+    receiver.cycles = [cycle]
+    pump_start = int(datetime(2026, 2, 2, 4, 10, 0, tzinfo=timezone.utc).timestamp())
     receiver._pump_on = True
     receiver._first_reading = False
-    receiver._pump_state_change_ts = 1700000000 - (6 * 60)  # 6 min run
-    receiver._process_reading(1700000000, 200.0)    # watts drop → pump off
-    receiver.email.send.assert_called_once()
-    assert 'run finished' in receiver.email.send.call_args[0][1]
-
-
-def test_pump_stop_after_short_run_no_email(receiver: DataReceiver) -> None:
-    """Verify that no email is sent when a short run finishes under the threshold."""
-    receiver._pump_on = True
-    receiver._first_reading = False
-    receiver._pump_state_change_ts = 1700000000 - (2 * 60)  # 2 min run
-    receiver._process_reading(1700000000, 200.0)
+    receiver._pump_state_change_ts = pump_start
+    receiver._process_reading(pump_start + 20 * 60, 200.0)
     receiver.email.send.assert_not_called()
-
-
-def test_pump_stop_resets_email_flag(receiver: DataReceiver) -> None:
-    """Verify that the email-sent flag is cleared when the pump stops."""
-    receiver._pump_on = True
-    receiver._first_reading = False
-    receiver._email_sent_for_current_run = True
-    receiver._pump_state_change_ts = 1700000000 - 60
-    receiver._process_reading(1700000000, 200.0)    # pump off
-    assert receiver._email_sent_for_current_run is False
 
 
 def test_pump_stop_updates_state_change_timestamp(receiver: DataReceiver) -> None:
@@ -180,11 +161,170 @@ def test_pump_stop_updates_state_change_timestamp(receiver: DataReceiver) -> Non
     assert receiver._pump_state_change_ts == 1700000000
 
 
+def test_pump_stop_accumulates_window_minutes(receiver: DataReceiver) -> None:
+    """Verify that a pump run within a treatment window accumulates into _window_minutes."""
+    cycle = _make_cycle(label='3-night', interval=3, start_h=4, end_h=5, min_dur=8.0)
+    receiver.cycles = [cycle]
+    # Pump started at 04:10 UTC on 2023-11-14 (1700000000 = 2023-11-14 22:13 UTC, use offset)
+    # Use a timestamp that falls in the 04:xx UTC hour
+    pump_start_ts = 1700000000  # arbitrary
+    from datetime import datetime, timezone
+    # Choose a start time in 04:xx UTC
+    dt_04 = datetime(2024, 1, 15, 4, 10, 0, tzinfo=timezone.utc)
+    pump_start = int(dt_04.timestamp())
+    pump_end = pump_start + 12 * 60  # 12 min run
+    receiver._pump_on = True
+    receiver._first_reading = False
+    receiver._pump_state_change_ts = pump_start
+    receiver._process_reading(pump_end, 200.0)  # pump off
+    key = (dt_04.date(), '3-night')
+    assert receiver._window_minutes.get(key, 0.0) == pytest.approx(12.0, abs=0.1)
+
+
+def test_pump_stop_confirms_cycle_when_above_min_duration(receiver: DataReceiver) -> None:
+    """Verify that cycle.last_run_date is updated when a run meets the minimum duration."""
+    from datetime import datetime, timezone
+    cycle = _make_cycle(label='3-night', interval=3, start_h=4, end_h=5, min_dur=8.0)
+    receiver.cycles = [cycle]
+    dt_04 = datetime(2024, 1, 15, 4, 10, 0, tzinfo=timezone.utc)
+    pump_start = int(dt_04.timestamp())
+    pump_end = pump_start + 12 * 60
+    receiver._pump_on = True
+    receiver._first_reading = False
+    receiver._pump_state_change_ts = pump_start
+    receiver._process_reading(pump_end, 200.0)
+    assert cycle.last_run_date == dt_04.date()
+
+
+def test_pump_stop_does_not_confirm_cycle_below_min_duration(receiver: DataReceiver) -> None:
+    """Verify that cycle.last_run_date is NOT updated for a run below minimum duration."""
+    from datetime import datetime, timezone
+    cycle = _make_cycle(label='3-night', interval=3, start_h=4, end_h=5, min_dur=8.0)
+    cycle.last_run_date = None
+    receiver.cycles = [cycle]
+    dt_04 = datetime(2024, 1, 15, 4, 10, 0, tzinfo=timezone.utc)
+    pump_start = int(dt_04.timestamp())
+    pump_end = pump_start + 5 * 60  # only 5 min, below 8 min threshold
+    receiver._pump_on = True
+    receiver._first_reading = False
+    receiver._pump_state_change_ts = pump_start
+    receiver._process_reading(pump_end, 200.0)
+    assert cycle.last_run_date is None
+
+
+# --- unexpected run alerts ---
+
+def test_unexpected_run_over_threshold_sends_alert(receiver: DataReceiver) -> None:
+    """Verify that a run outside all treatment windows triggers an alert when over threshold."""
+    from datetime import datetime, timezone
+    # 10:00 UTC is outside all treatment windows (01-02, 02-04, 04-05)
+    pump_start = int(datetime(2026, 2, 2, 10, 0, 0, tzinfo=timezone.utc).timestamp())
+    pump_end = pump_start + 10 * 60  # 10 min, over 7 min threshold
+    receiver._pump_on = True
+    receiver._first_reading = False
+    receiver._pump_state_change_ts = pump_start
+    receiver._process_reading(pump_end, 200.0)
+    receiver.email.send.assert_called_once()
+    subject = receiver.email.send.call_args[0][1]
+    assert 'Unexpected' in subject
+
+
+def test_unexpected_run_under_threshold_no_alert(receiver: DataReceiver) -> None:
+    """Verify that a short out-of-window run does not trigger an alert."""
+    from datetime import datetime, timezone
+    pump_start = int(datetime(2026, 2, 2, 10, 0, 0, tzinfo=timezone.utc).timestamp())
+    pump_end = pump_start + 5 * 60  # 5 min, under 7 min threshold
+    receiver._pump_on = True
+    receiver._first_reading = False
+    receiver._pump_state_change_ts = pump_start
+    receiver._process_reading(pump_end, 200.0)
+    receiver.email.send.assert_not_called()
+
+
+def test_run_in_treatment_window_no_unexpected_alert(receiver: DataReceiver) -> None:
+    """Verify that a run inside a treatment window does not send an unexpected alert."""
+    from datetime import datetime, timezone
+    cycle = _make_cycle(label='3-night', interval=3, start_h=4, end_h=5, min_dur=8.0)
+    receiver.cycles = [cycle]
+    pump_start = int(datetime(2026, 2, 2, 4, 10, 0, tzinfo=timezone.utc).timestamp())
+    pump_end = pump_start + 12 * 60  # 12 min, in 04:xx window
+    receiver._pump_on = True
+    receiver._first_reading = False
+    receiver._pump_state_change_ts = pump_start
+    receiver._process_reading(pump_end, 200.0)
+    receiver.email.send.assert_not_called()
+
+
+# --- _check_missed_treatments ---
+
+def test_missed_treatment_sends_alert(receiver: DataReceiver) -> None:
+    """Verify that an alert is sent when a due cycle had no sufficient activity."""
+    cycle = _make_cycle(label='5-night', interval=5, start_h=2, end_h=4, min_dur=3.0,
+                        last_run=date(2026, 1, 1))
+    receiver.cycles = [cycle]
+    # No activity recorded for Jan 6 (5 days later)
+    receiver._check_missed_treatments(date(2026, 1, 6))
+    receiver.email.send.assert_called_once()
+    subject = receiver.email.send.call_args[0][1]
+    assert 'Missed' in subject and '5-night' in subject
+
+
+def test_treatment_confirmed_no_alert(receiver: DataReceiver) -> None:
+    """Verify that no alert is sent when a due cycle had sufficient activity."""
+    cycle = _make_cycle(label='5-night', interval=5, start_h=2, end_h=4, min_dur=3.0,
+                        last_run=date(2026, 1, 1))
+    receiver.cycles = [cycle]
+    receiver._window_minutes[(date(2026, 1, 6), '5-night')] = 4.5  # sufficient
+    receiver._check_missed_treatments(date(2026, 1, 6))
+    receiver.email.send.assert_not_called()
+
+
+def test_not_due_cycle_no_alert(receiver: DataReceiver) -> None:
+    """Verify that no alert is sent when a cycle is not yet due."""
+    cycle = _make_cycle(label='5-night', interval=5, start_h=2, end_h=4, min_dur=3.0,
+                        last_run=date(2026, 1, 1))
+    receiver.cycles = [cycle]
+    # Only 3 days since last run — not due for 5-night
+    receiver._check_missed_treatments(date(2026, 1, 4))
+    receiver.email.send.assert_not_called()
+
+
+def test_no_last_run_date_no_alert(receiver: DataReceiver) -> None:
+    """Verify that no alert is sent when last_run_date is None (first cycle not yet seen)."""
+    cycle = _make_cycle(label='5-night', interval=5, start_h=2, end_h=4, min_dur=3.0,
+                        last_run=None)
+    receiver.cycles = [cycle]
+    receiver._check_missed_treatments(date(2026, 1, 6))
+    receiver.email.send.assert_not_called()
+
+
+# --- date rollover ---
+
+def test_date_rollover_triggers_missed_treatment_check(receiver: DataReceiver) -> None:
+    """Verify that processing a reading on a new date triggers the missed treatment check."""
+    from unittest.mock import patch as _patch
+    cycle = _make_cycle(label='5-night', interval=5, start_h=2, end_h=4, min_dur=3.0,
+                        last_run=date(2026, 1, 1))
+    receiver.cycles = [cycle]
+    # First reading on Jan 6 sets _current_date
+    receiver._pump_on = False
+    receiver._first_reading = False
+    ts_jan6 = int(__import__('datetime').datetime(2026, 1, 6, 10, 0, tzinfo=__import__('datetime').timezone.utc).timestamp())
+    receiver._process_reading(ts_jan6, 200.0)
+    assert receiver._current_date == date(2026, 1, 6)
+    # Reading on Jan 7 triggers check for Jan 6
+    ts_jan7 = int(__import__('datetime').datetime(2026, 1, 7, 10, 0, tzinfo=__import__('datetime').timezone.utc).timestamp())
+    receiver._process_reading(ts_jan7, 200.0)
+    # Missed alert should have been sent for Jan 6
+    receiver.email.send.assert_called_once()
+
+
 # --- receive_data ---
 
 def test_receive_data_sends_startup_email(receiver: DataReceiver) -> None:
     """Verify that a startup notification email is sent before the receive loop begins."""
     receiver.sock.recvfrom.side_effect = KeyboardInterrupt()
+    receiver.db.get_last_run_date_in_window.return_value = None
     with pytest.raises(KeyboardInterrupt):
         receiver.receive_data()
     receiver.email.send.assert_called_once()
@@ -197,5 +337,6 @@ def test_receive_data_continues_after_exception(receiver: DataReceiver) -> None:
         Exception("transient socket error"),
         KeyboardInterrupt(),
     ]
+    receiver.db.get_last_run_date_in_window.return_value = None
     with pytest.raises(KeyboardInterrupt):
         receiver.receive_data()
