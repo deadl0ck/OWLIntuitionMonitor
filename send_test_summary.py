@@ -75,5 +75,18 @@ print()
 print(body)
 print()
 
-email.send(receiver_address, subject, body)
-print('Sent.')
+import smtplib
+import sys
+
+try:
+    email.send(receiver_address, subject, body)
+    print('Sent.')
+except smtplib.SMTPAuthenticationError:
+    print('ERROR: Gmail authentication failed.', file=sys.stderr)
+    print('  — Check GMAIL_APP_PASSWORD in .env is correct', file=sys.stderr)
+    print('  — Check [email] sender in config.ini matches the Gmail account', file=sys.stderr)
+    print('  — App Password must be generated at myaccount.google.com/apppasswords', file=sys.stderr)
+    sys.exit(1)
+except smtplib.SMTPException as e:
+    print(f'ERROR: Failed to send email: {e}', file=sys.stderr)
+    sys.exit(1)
