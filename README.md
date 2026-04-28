@@ -4,6 +4,18 @@ Listens for UDP multicast data from an OWL Intuition power monitor and tracks el
 
 ---
 
+## Table of contents
+
+- [Quickstart](#quickstart)
+- [How it works](#how-it-works)
+- [Directory structure](#directory-structure)
+- [Setup](#setup)
+- [Running](#running)
+- [Testing](#testing)
+- [Database](#database)
+
+---
+
 ## Quickstart
 
 ```bash
