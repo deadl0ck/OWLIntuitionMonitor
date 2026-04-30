@@ -20,6 +20,40 @@ _LABEL_COLOURS = {
 }
 
 
+def _build_startup_html(cycles: list) -> str:
+    now = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
+    rows = ''
+    for c in cycles:
+        fg, bg = _LABEL_COLOURS.get(c.label, ('#555', '#f5f5f5'))
+        rows += (
+            f'<tr>'
+            f'<td style="padding:6px 12px 6px 0;color:#5b6b82;font-size:13px;white-space:nowrap">{c.label}</td>'
+            f'<td style="padding:6px 0;font-size:13px">'
+            f'<span style="background:{bg};color:{fg};border-radius:999px;padding:2px 10px;'
+            f'font-size:11px;font-weight:700">every {c.interval_days} nights</span>'
+            f'</td>'
+            f'</tr>'
+        )
+    return f'''<!DOCTYPE html>
+<html><body style="margin:0;padding:16px;background:#f4f7fb;font-family:Segoe UI,Helvetica,Arial,sans-serif;color:#172033">
+<div style="max-width:520px;margin:0 auto;background:#fff;border:1px solid #d0dae8;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.08);overflow:hidden">
+  <div style="background:linear-gradient(135deg,#143a52,#1e5f74);padding:16px 20px">
+    <div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:#a8d4e6;font-weight:700;margin-bottom:4px">Pumphouse Monitor</div>
+    <div style="font-size:20px;font-weight:700;color:#fff">Monitor Starting</div>
+    <div style="font-size:12px;color:#c8dde8;margin-top:4px">{now}</div>
+  </div>
+  <div style="padding:16px 20px">
+    <div style="font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:#143a52;font-weight:700;margin-bottom:10px">
+      Tracking {len(cycles)} Treatment Cycle{'s' if len(cycles) != 1 else ''}
+    </div>
+    <table role="presentation" style="border-collapse:collapse;width:100%">
+      {rows}
+    </table>
+  </div>
+</div>
+</body></html>'''
+
+
 def _build_summary_text(week_start: 'date', week_end: 'date',
                          tagged: list[tuple['datetime', float, str]]) -> str:
     lines = [
@@ -337,7 +371,12 @@ class DataReceiver:
             + ', '.join(f'{c.label} (every {c.interval_days} nights)' for c in self.cycles)
         )
         logger.info(message)
-        self.email.send(self.email_receiver, 'PUMPHOUSE: Monitor Starting', message)
+        self.email.send(
+            self.email_receiver,
+            'PUMPHOUSE: Monitor Starting',
+            message,
+            html=_build_startup_html(self.cycles),
+        )
 
         while True:
             try:
