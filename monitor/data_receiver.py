@@ -54,6 +54,76 @@ def _build_startup_html(cycles: list) -> str:
 </body></html>'''
 
 
+def _build_unexpected_html(pump_start_str: str, duration: float) -> str:
+    fg, bg = _LABEL_COLOURS['unexpected']
+    return f'''<!DOCTYPE html>
+<html><body style="margin:0;padding:16px;background:#f4f7fb;font-family:Segoe UI,Helvetica,Arial,sans-serif;color:#172033">
+<div style="max-width:520px;margin:0 auto;background:#fff;border:1px solid #d0dae8;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.08);overflow:hidden">
+  <div style="background:linear-gradient(135deg,#143a52,#1e5f74);padding:16px 20px">
+    <div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:#a8d4e6;font-weight:700;margin-bottom:4px">Pumphouse Monitor</div>
+    <div style="font-size:20px;font-weight:700;color:#fff">Unexpected Pump Run</div>
+    <div style="font-size:12px;color:#c8dde8;margin-top:4px">{pump_start_str}</div>
+  </div>
+  <div style="padding:16px 20px">
+    <table role="presentation" style="border-collapse:collapse;width:100%">
+      <tr>
+        <td style="padding:6px 12px 6px 0;color:#5b6b82;font-size:13px;white-space:nowrap">Started</td>
+        <td style="padding:6px 0;font-size:13px">{pump_start_str}</td>
+      </tr>
+      <tr>
+        <td style="padding:6px 12px 6px 0;color:#5b6b82;font-size:13px;white-space:nowrap">Duration</td>
+        <td style="padding:6px 0;font-size:13px">{duration:.1f} minutes</td>
+      </tr>
+      <tr>
+        <td style="padding:6px 12px 6px 0;color:#5b6b82;font-size:13px;white-space:nowrap">Type</td>
+        <td style="padding:6px 0;font-size:13px">
+          <span style="background:{bg};color:{fg};border-radius:999px;padding:2px 10px;font-size:11px;font-weight:700">unexpected</span>
+        </td>
+      </tr>
+    </table>
+    <div style="margin-top:12px;font-size:12px;color:#888">This run was outside all expected treatment windows.</div>
+  </div>
+</div>
+</body></html>'''
+
+
+def _build_missed_html(cycle_label: str, prev_date: 'date', minutes: float,
+                       min_duration: float) -> str:
+    fg, bg = _LABEL_COLOURS.get(cycle_label, ('#555', '#f5f5f5'))
+    return f'''<!DOCTYPE html>
+<html><body style="margin:0;padding:16px;background:#f4f7fb;font-family:Segoe UI,Helvetica,Arial,sans-serif;color:#172033">
+<div style="max-width:520px;margin:0 auto;background:#fff;border:1px solid #d0dae8;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.08);overflow:hidden">
+  <div style="background:linear-gradient(135deg,#143a52,#1e5f74);padding:16px 20px">
+    <div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:#a8d4e6;font-weight:700;margin-bottom:4px">Pumphouse Monitor</div>
+    <div style="font-size:20px;font-weight:700;color:#fff">Missed Treatment</div>
+    <div style="font-size:12px;color:#c8dde8;margin-top:4px">{prev_date}</div>
+  </div>
+  <div style="padding:16px 20px">
+    <table role="presentation" style="border-collapse:collapse;width:100%">
+      <tr>
+        <td style="padding:6px 12px 6px 0;color:#5b6b82;font-size:13px;white-space:nowrap">Cycle</td>
+        <td style="padding:6px 0;font-size:13px">
+          <span style="background:{bg};color:{fg};border-radius:999px;padding:2px 10px;font-size:11px;font-weight:700">{cycle_label}</span>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:6px 12px 6px 0;color:#5b6b82;font-size:13px;white-space:nowrap">Expected date</td>
+        <td style="padding:6px 0;font-size:13px">{prev_date}</td>
+      </tr>
+      <tr>
+        <td style="padding:6px 12px 6px 0;color:#5b6b82;font-size:13px;white-space:nowrap">Activity in window</td>
+        <td style="padding:6px 0;font-size:13px">{minutes:.1f} min</td>
+      </tr>
+      <tr>
+        <td style="padding:6px 12px 6px 0;color:#5b6b82;font-size:13px;white-space:nowrap">Minimum expected</td>
+        <td style="padding:6px 0;font-size:13px">{min_duration:.1f} min</td>
+      </tr>
+    </table>
+  </div>
+</div>
+</body></html>'''
+
+
 def _build_summary_text(week_start: 'date', week_end: 'date',
                          tagged: list[tuple['datetime', float, str]]) -> str:
     lines = [
@@ -288,6 +358,7 @@ class DataReceiver:
                     f'PUMPHOUSE: Unexpected run on {pump_start_date}',
                     f'Pump ran for {duration:.1f} minutes starting at {pump_start_str}.\n'
                     f'This run was outside all expected treatment windows.',
+                    html=_build_unexpected_html(pump_start_str, duration),
                 )
                 logger.warning(
                     f'Unexpected run on {pump_start_date} at {pump_start_str} '
@@ -309,6 +380,8 @@ class DataReceiver:
                     f'Expected {cycle.label} treatment on {prev_date} did not run.\n'
                     f'Pump activity in window: {minutes:.1f} min '
                     f'(minimum expected: {cycle.min_duration_minutes} min).',
+                    html=_build_missed_html(cycle.label, prev_date, minutes,
+                                            cycle.min_duration_minutes),
                 )
                 logger.warning(
                     f'Missed {cycle.label} treatment on {prev_date} '
