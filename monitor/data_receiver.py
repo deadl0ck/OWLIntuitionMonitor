@@ -25,13 +25,15 @@ def _build_startup_html(cycles: list) -> str:
     rows = ''
     for c in cycles:
         fg, bg = _LABEL_COLOURS.get(c.label, ('#555', '#f5f5f5'))
+        window = f'{c.utc_start_hour:02d}:00–{c.utc_end_hour:02d}:00 UTC'
         rows += (
             f'<tr>'
             f'<td style="padding:6px 12px 6px 0;color:#5b6b82;font-size:13px;white-space:nowrap">{c.label}</td>'
-            f'<td style="padding:6px 0;font-size:13px">'
+            f'<td style="padding:6px 8px 6px 0;font-size:13px">'
             f'<span style="background:{bg};color:{fg};border-radius:999px;padding:2px 10px;'
             f'font-size:11px;font-weight:700">every {c.interval_days} nights</span>'
             f'</td>'
+            f'<td style="padding:6px 0;font-size:12px;color:#8a99a8;white-space:nowrap">{window}</td>'
             f'</tr>'
         )
     return f'''<!DOCTYPE html>
@@ -441,7 +443,10 @@ class DataReceiver:
         message = (
             f'Pumphouse monitoring starting — '
             f'tracking {len(self.cycles)} treatment cycle(s): '
-            + ', '.join(f'{c.label} (every {c.interval_days} nights)' for c in self.cycles)
+            + ', '.join(
+                f'{c.label} (every {c.interval_days} nights, {c.utc_start_hour:02d}:00–{c.utc_end_hour:02d}:00 UTC)'
+                for c in self.cycles
+            )
         )
         logger.info(message)
         self.email.send(
