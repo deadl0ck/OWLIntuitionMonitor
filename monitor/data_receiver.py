@@ -385,6 +385,7 @@ class DataReceiver:
                     html=_build_missed_html(cycle.label, prev_date, minutes,
                                             cycle.min_duration_minutes),
                 )
+                cycle.last_run_date = prev_date
                 logger.warning(
                     f'Missed {cycle.label} treatment on {prev_date} '
                     f'— only {minutes:.1f} min in window'

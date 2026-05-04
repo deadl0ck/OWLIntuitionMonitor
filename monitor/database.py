@@ -46,11 +46,15 @@ class Database:
 
     def get_last_run_date_in_window(self, start_hour: int, end_hour: int,
                                     min_duration: float) -> date | None:
-        """Return the most recent UTC date on which a qualifying run ended in the given hour window.
+        """Return the most recent UTC date on which a qualifying run started in the given hour window.
 
         Only counts ON→OFF transitions (the row where the pump first goes to PUMP_ON=0 after
         being on). At that row, DURATION equals the actual run length. Subsequent off-state
         rows have a growing "time since off" duration and are excluded by the LAG filter.
+
+        Matching is by pump START hour (UNIX_TIMESTAMP - DURATION*60), consistent with how
+        _process_reading attributes runs to cycles. Treatments often run past the end of their
+        window, so filtering by end time would miss them.
 
         Searches the last 30 days, which is sufficient to seed any cycle up to 14 nights.
 
@@ -60,13 +64,13 @@ class Database:
             min_duration: Minimum run duration in minutes.
 
         Returns:
-            The most recent date, or None if no qualifying run exists.
+            The most recent date (of pump start), or None if no qualifying run exists.
         """
         cur = self.connection.execute(
             """
-            SELECT MAX(UNIX_TIMESTAMP)
+            SELECT MAX(UNIX_TIMESTAMP - DURATION * 60)
             FROM (
-                SELECT UNIX_TIMESTAMP, TIMESTAMP, DURATION, PUMP_ON,
+                SELECT UNIX_TIMESTAMP, DURATION, PUMP_ON,
                        LAG(PUMP_ON, 1, 0) OVER (ORDER BY UNIX_TIMESTAMP) AS prev_pump_on
                 FROM PH_DATA
                 WHERE UNIX_TIMESTAMP >= (SELECT MAX(UNIX_TIMESTAMP) FROM PH_DATA) - 30 * 86400
@@ -74,8 +78,8 @@ class Database:
             WHERE PUMP_ON = 0
               AND prev_pump_on = 1
               AND DURATION >= ?
-              AND CAST(strftime('%H', TIMESTAMP) AS INTEGER) >= ?
-              AND CAST(strftime('%H', TIMESTAMP) AS INTEGER) < ?
+              AND CAST(strftime('%H', datetime(UNIX_TIMESTAMP - DURATION * 60, 'unixepoch')) AS INTEGER) >= ?
+              AND CAST(strftime('%H', datetime(UNIX_TIMESTAMP - DURATION * 60, 'unixepoch')) AS INTEGER) < ?
             """,
             (min_duration, start_hour, end_hour),
         )
