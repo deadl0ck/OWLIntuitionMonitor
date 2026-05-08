@@ -30,13 +30,15 @@ NO_CHAN_XML = '<electricity id="443719D3"><timestamp>1700000000</timestamp></ele
 
 def _make_cycle(label: str = 'test', interval: int = 5, start_h: int = 2,
                 end_h: int = 4, min_dur: float = 3.0,
-                last_run: date | None = None) -> TreatmentCycle:
+                last_run: date | None = None,
+                next_expected: date | None = None) -> TreatmentCycle:
     c = TreatmentCycle(
         label=label, interval_days=interval,
         utc_start_hour=start_h, utc_end_hour=end_h,
         min_duration_minutes=min_dur,
     )
     c.last_run_date = last_run
+    c.next_expected_date = next_expected
     return c
 
 
@@ -55,6 +57,7 @@ def receiver() -> DataReceiver:
             summary_day=0,
             summary_hour_utc=7,
             unexpected_alert_threshold=7.0,
+            send_confirmation_emails=False,
         )
         return r
 
@@ -260,39 +263,68 @@ def test_run_in_treatment_window_no_unexpected_alert(receiver: DataReceiver) -> 
 def test_missed_treatment_sends_alert(receiver: DataReceiver) -> None:
     """Verify that an alert is sent when a due cycle had no sufficient activity."""
     cycle = _make_cycle(label='5-night', interval=5, start_h=2, end_h=4, min_dur=3.0,
-                        last_run=date(2026, 1, 1))
+                        next_expected=date(2026, 1, 6))
     receiver.cycles = [cycle]
-    # No activity recorded for Jan 6 (5 days later)
     receiver._check_missed_treatments(date(2026, 1, 6))
     receiver.email.send.assert_called_once()
     subject = receiver.email.send.call_args[0][1]
     assert 'Missed' in subject and '5-night' in subject
 
 
-def test_treatment_confirmed_no_alert(receiver: DataReceiver) -> None:
-    """Verify that no alert is sent when a due cycle had sufficient activity."""
+def test_missed_treatment_advances_schedule(receiver: DataReceiver) -> None:
+    """Verify that next_expected_date advances by interval_days after a missed check."""
     cycle = _make_cycle(label='5-night', interval=5, start_h=2, end_h=4, min_dur=3.0,
-                        last_run=date(2026, 1, 1))
+                        next_expected=date(2026, 1, 6))
     receiver.cycles = [cycle]
-    receiver._window_minutes[(date(2026, 1, 6), '5-night')] = 4.5  # sufficient
+    receiver._check_missed_treatments(date(2026, 1, 6))
+    assert cycle.next_expected_date == date(2026, 1, 11)
+
+
+def test_treatment_confirmed_no_alert_when_emails_disabled(receiver: DataReceiver) -> None:
+    """Verify that no email is sent when a due cycle ran and confirmation emails are off."""
+    cycle = _make_cycle(label='5-night', interval=5, start_h=2, end_h=4, min_dur=3.0,
+                        next_expected=date(2026, 1, 6))
+    receiver.cycles = [cycle]
+    receiver._window_minutes[(date(2026, 1, 6), '5-night')] = 4.5
     receiver._check_missed_treatments(date(2026, 1, 6))
     receiver.email.send.assert_not_called()
+
+
+def test_treatment_confirmed_sends_email_when_enabled(receiver: DataReceiver) -> None:
+    """Verify that a confirmation email is sent when a due cycle ran and emails are on."""
+    cycle = _make_cycle(label='5-night', interval=5, start_h=2, end_h=4, min_dur=3.0,
+                        next_expected=date(2026, 1, 6))
+    receiver.cycles = [cycle]
+    receiver.send_confirmation_emails = True
+    receiver._window_minutes[(date(2026, 1, 6), '5-night')] = 4.5
+    receiver._check_missed_treatments(date(2026, 1, 6))
+    receiver.email.send.assert_called_once()
+    subject = receiver.email.send.call_args[0][1]
+    assert 'confirmed' in subject and '5-night' in subject
+
+
+def test_treatment_confirmed_advances_schedule(receiver: DataReceiver) -> None:
+    """Verify that next_expected_date advances after a confirmed treatment."""
+    cycle = _make_cycle(label='5-night', interval=5, start_h=2, end_h=4, min_dur=3.0,
+                        next_expected=date(2026, 1, 6))
+    receiver.cycles = [cycle]
+    receiver._window_minutes[(date(2026, 1, 6), '5-night')] = 4.5
+    receiver._check_missed_treatments(date(2026, 1, 6))
+    assert cycle.next_expected_date == date(2026, 1, 11)
 
 
 def test_not_due_cycle_no_alert(receiver: DataReceiver) -> None:
     """Verify that no alert is sent when a cycle is not yet due."""
     cycle = _make_cycle(label='5-night', interval=5, start_h=2, end_h=4, min_dur=3.0,
-                        last_run=date(2026, 1, 1))
+                        next_expected=date(2026, 1, 8))
     receiver.cycles = [cycle]
-    # Only 3 days since last run — not due for 5-night
-    receiver._check_missed_treatments(date(2026, 1, 4))
+    receiver._check_missed_treatments(date(2026, 1, 6))
     receiver.email.send.assert_not_called()
 
 
-def test_no_last_run_date_no_alert(receiver: DataReceiver) -> None:
-    """Verify that no alert is sent when last_run_date is None (first cycle not yet seen)."""
-    cycle = _make_cycle(label='5-night', interval=5, start_h=2, end_h=4, min_dur=3.0,
-                        last_run=None)
+def test_no_next_expected_date_no_alert(receiver: DataReceiver) -> None:
+    """Verify that no alert is sent when next_expected_date is None (first run not yet seen)."""
+    cycle = _make_cycle(label='5-night', interval=5, start_h=2, end_h=4, min_dur=3.0)
     receiver.cycles = [cycle]
     receiver._check_missed_treatments(date(2026, 1, 6))
     receiver.email.send.assert_not_called()
@@ -302,9 +334,8 @@ def test_no_last_run_date_no_alert(receiver: DataReceiver) -> None:
 
 def test_date_rollover_triggers_missed_treatment_check(receiver: DataReceiver) -> None:
     """Verify that processing a reading on a new date triggers the missed treatment check."""
-    from unittest.mock import patch as _patch
     cycle = _make_cycle(label='5-night', interval=5, start_h=2, end_h=4, min_dur=3.0,
-                        last_run=date(2026, 1, 1))
+                        next_expected=date(2026, 1, 6))
     receiver.cycles = [cycle]
     # First reading on Jan 6 sets _current_date
     receiver._pump_on = False

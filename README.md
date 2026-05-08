@@ -146,6 +146,7 @@ Edit `config.ini` directly. These values are not secret and can be committed to 
 | `[treatment] cycles` | Pipe-separated list of treatment cycles — see format below |
 | `[treatment] summary_day` | Day of week for the weekly summary email (default: `Monday`) |
 | `[treatment] summary_hour_utc` | UTC hour after which the weekly summary is sent (default: `7`) |
+| `[treatment] send_confirmation_emails` | Send an info email each time a scheduled treatment is confirmed (default: `true`). Set to `false` once you are satisfied the schedule is tracking correctly. |
 
 **Treatment cycle format** — each entry in `cycles` is comma-separated:
 `interval_days,utc_start_hour,utc_end_hour,min_duration_minutes,label`
@@ -164,9 +165,18 @@ cycles = 14,1,2,15,14-night | 5,2,4,3,5-night | 3,4,5,8,3-night
 | `label` | Human-readable name used in alert subjects and the weekly summary |
 
 An alert is sent if a cycle's UTC window shows less than `min_duration_minutes` of pump
-activity on a date when the cycle was due. A cycle is considered due once
-`(today - last_run_date) >= interval_days`. No alert is sent until the first run of each
-cycle has been observed (seeded from the database on startup).
+activity on the specific date the cycle was due. On startup the monitor seeds the last
+confirmed run date from the database and computes a `next_expected_date`
+(`last_run_date + interval_days`), fast-forwarding past any dates already elapsed. A
+missed-treatment alert fires only when the checked date exactly matches `next_expected_date`;
+after every check (hit or miss) the expected date advances by `interval_days`. This ensures
+alerts fire on the correct scheduled night rather than accumulating on every subsequent day
+after a missed run. No alert is sent until the first run of each cycle has been observed
+(seeded from the database on startup).
+
+If `send_confirmation_emails = true`, a confirmation email is also sent at the end of each
+night when a scheduled treatment ran successfully. This is useful when first setting up or
+after making changes; disable it once you are confident the schedule is tracking correctly.
 
 ---
 

@@ -51,6 +51,7 @@ for part in config.get('treatment', 'cycles').split('|'):
 
 summary_day = _WEEKDAYS[config.get('treatment', 'summary_day')]
 summary_hour_utc = config.getint('treatment', 'summary_hour_utc')
+SEND_CONFIRMATION_EMAILS = config.getboolean('treatment', 'send_confirmation_emails')
 
 db = Database(DB_FILENAME)
 email = EmailSender(EMAIL_SENDER, GMAIL_APP_PASSWORD)
@@ -65,6 +66,7 @@ receiver = DataReceiver(
     summary_day=summary_day,
     summary_hour_utc=summary_hour_utc,
     unexpected_alert_threshold=UNEXPECTED_ALERT_THRESHOLD,
+    send_confirmation_emails=SEND_CONFIRMATION_EMAILS,
 )
 
 receiver.receive_data()

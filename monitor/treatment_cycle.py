@@ -1,7 +1,7 @@
 """Treatment cycle definition for pumphouse water treatment programs."""
 
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 
 
 @dataclass
@@ -16,6 +16,9 @@ class TreatmentCycle:
         min_duration_minutes: Minimum pump-on time to count as a valid treatment run.
         last_run_date: Most recent date on which a valid run was confirmed (seeded from DB
             at startup; updated as runs are observed).
+        next_expected_date: The specific calendar date on which the next run is expected.
+            Computed from last_run_date + interval_days on startup, then advanced by
+            interval_days after each check (hit or miss). None until first run is seeded.
     """
     label: str
     interval_days: int
@@ -23,17 +26,24 @@ class TreatmentCycle:
     utc_end_hour: int
     min_duration_minutes: float
     last_run_date: date | None = field(default=None)
+    next_expected_date: date | None = field(default=None)
 
     def covers_hour(self, hour: int) -> bool:
         """Return True if the given UTC hour falls within this cycle's window."""
         return self.utc_start_hour <= hour < self.utc_end_hour
 
     def is_due(self, on_date: date) -> bool:
-        """Return True if this cycle should have run by on_date.
+        """Return True only if on_date is exactly the next scheduled run date.
 
-        Returns False when last_run_date is None (not yet seen) to avoid false
-        alerts before the first confirmed run is observed.
+        This ensures alerts fire only on the specific night a treatment is due,
+        not on every subsequent night after a missed run accumulates overdue days.
+        Returns False when next_expected_date is None (not yet seeded).
         """
-        if self.last_run_date is None:
+        if self.next_expected_date is None:
             return False
-        return (on_date - self.last_run_date).days >= self.interval_days
+        return on_date == self.next_expected_date
+
+    def advance_schedule(self) -> None:
+        """Advance next_expected_date by one interval after a check (hit or miss)."""
+        if self.next_expected_date is not None:
+            self.next_expected_date += timedelta(days=self.interval_days)

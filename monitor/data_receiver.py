@@ -89,6 +89,43 @@ def _build_unexpected_html(pump_start_str: str, duration: float) -> str:
 </body></html>'''
 
 
+def _build_confirmation_html(cycle_label: str, run_date: 'date', minutes: float,
+                             min_duration: float) -> str:
+    fg, bg = _LABEL_COLOURS.get(cycle_label, ('#555', '#f5f5f5'))
+    return f'''<!DOCTYPE html>
+<html><body style="margin:0;padding:16px;background:#f4f7fb;font-family:Segoe UI,Helvetica,Arial,sans-serif;color:#172033">
+<div style="max-width:520px;margin:0 auto;background:#fff;border:1px solid #d0dae8;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.08);overflow:hidden">
+  <div style="background:linear-gradient(135deg,#1a6b2e,#2d9e4e);padding:16px 20px">
+    <div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:#a8e6b8;font-weight:700;margin-bottom:4px">Pumphouse Monitor</div>
+    <div style="font-size:20px;font-weight:700;color:#fff">Treatment Confirmed</div>
+    <div style="font-size:12px;color:#c8ecd0;margin-top:4px">{run_date}</div>
+  </div>
+  <div style="padding:16px 20px">
+    <table role="presentation" style="border-collapse:collapse;width:100%">
+      <tr>
+        <td style="padding:6px 12px 6px 0;color:#5b6b82;font-size:13px;white-space:nowrap">Cycle</td>
+        <td style="padding:6px 0;font-size:13px">
+          <span style="background:{bg};color:{fg};border-radius:999px;padding:2px 10px;font-size:11px;font-weight:700">{cycle_label}</span>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:6px 12px 6px 0;color:#5b6b82;font-size:13px;white-space:nowrap">Date</td>
+        <td style="padding:6px 0;font-size:13px">{run_date}</td>
+      </tr>
+      <tr>
+        <td style="padding:6px 12px 6px 0;color:#5b6b82;font-size:13px;white-space:nowrap">Activity in window</td>
+        <td style="padding:6px 0;font-size:13px">{minutes:.1f} min</td>
+      </tr>
+      <tr>
+        <td style="padding:6px 12px 6px 0;color:#5b6b82;font-size:13px;white-space:nowrap">Minimum expected</td>
+        <td style="padding:6px 0;font-size:13px">{min_duration:.1f} min</td>
+      </tr>
+    </table>
+  </div>
+</div>
+</body></html>'''
+
+
 def _build_missed_html(cycle_label: str, prev_date: 'date', minutes: float,
                        min_duration: float) -> str:
     fg, bg = _LABEL_COLOURS.get(cycle_label, ('#555', '#f5f5f5'))
@@ -224,7 +261,8 @@ class DataReceiver:
                  cycles: list[TreatmentCycle],
                  summary_day: int,
                  summary_hour_utc: int,
-                 unexpected_alert_threshold: float) -> None:
+                 unexpected_alert_threshold: float,
+                 send_confirmation_emails: bool = False) -> None:
         """Bind a UDP socket and join the multicast group.
 
         Args:
@@ -238,6 +276,9 @@ class DataReceiver:
             summary_day: Weekday on which to send weekly summary (0=Monday).
             summary_hour_utc: UTC hour after which to send the weekly summary.
             unexpected_alert_threshold: Minutes above which an out-of-window run triggers an alert.
+            send_confirmation_emails: When True, send an info email each time a scheduled
+                treatment is confirmed. Configurable so it can be disabled once the
+                schedule is verified.
         """
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind(('', port))
@@ -253,6 +294,7 @@ class DataReceiver:
         self.summary_day = summary_day
         self.summary_hour_utc = summary_hour_utc
         self.unexpected_alert_threshold = unexpected_alert_threshold
+        self.send_confirmation_emails = send_confirmation_emails
 
         self._pump_on = False
         self._pump_state_change_ts: float = time.time()
@@ -263,14 +305,19 @@ class DataReceiver:
         self._last_summary_week: int | None = None
 
     def _init_cycle_last_runs(self) -> None:
-        """Seed each cycle's last_run_date from the database on startup."""
+        """Seed each cycle's last_run_date and next_expected_date from the database on startup."""
+        today = datetime.now(timezone.utc).date()
         for cycle in self.cycles:
             last = self.db.get_last_run_date_in_window(
                 cycle.utc_start_hour, cycle.utc_end_hour, cycle.min_duration_minutes
             )
             cycle.last_run_date = last
             if last:
-                logger.info(f'{cycle.label}: last confirmed run {last}')
+                next_expected = last + timedelta(days=cycle.interval_days)
+                while next_expected < today:
+                    next_expected += timedelta(days=cycle.interval_days)
+                cycle.next_expected_date = next_expected
+                logger.info(f'{cycle.label}: last confirmed run {last}, next expected {next_expected}')
             else:
                 logger.warning(f'{cycle.label}: no prior run found in DB — will not alert until first run is seen')
 
@@ -352,6 +399,10 @@ class DataReceiver:
                 self._window_minutes[key] = self._window_minutes.get(key, 0.0) + duration
                 if duration >= matched_cycle.min_duration_minutes:
                     matched_cycle.last_run_date = pump_start_date
+                    if matched_cycle.next_expected_date is None:
+                        matched_cycle.next_expected_date = (
+                            pump_start_date + timedelta(days=matched_cycle.interval_days)
+                        )
                     logger.info(f'{matched_cycle.label} treatment run confirmed ({duration:.1f} min)')
             elif duration >= self.unexpected_alert_threshold:
                 pump_start_str = pump_start_dt.strftime('%Y-%m-%d %H:%M UTC')
@@ -370,7 +421,7 @@ class DataReceiver:
             return
 
     def _check_missed_treatments(self, prev_date: date) -> None:
-        """Send alerts for any treatment cycles that were due but did not run on prev_date."""
+        """Check each cycle that was due on prev_date; alert if missed, confirm if run."""
         for cycle in self.cycles:
             if not cycle.is_due(prev_date):
                 continue
@@ -385,16 +436,27 @@ class DataReceiver:
                     html=_build_missed_html(cycle.label, prev_date, minutes,
                                             cycle.min_duration_minutes),
                 )
-                cycle.last_run_date = prev_date
                 logger.warning(
                     f'Missed {cycle.label} treatment on {prev_date} '
                     f'— only {minutes:.1f} min in window'
                 )
             else:
+                cycle.last_run_date = prev_date
                 logger.info(
                     f'{cycle.label} treatment on {prev_date} confirmed '
                     f'({minutes:.1f} min in window)'
                 )
+                if self.send_confirmation_emails:
+                    self.email.send(
+                        self.email_receiver,
+                        f'PUMPHOUSE: {cycle.label} treatment confirmed on {prev_date}',
+                        f'{cycle.label} treatment on {prev_date} ran as expected.\n'
+                        f'Pump activity in window: {minutes:.1f} min '
+                        f'(minimum expected: {cycle.min_duration_minutes} min).',
+                        html=_build_confirmation_html(cycle.label, prev_date, minutes,
+                                                      cycle.min_duration_minutes),
+                    )
+            cycle.advance_schedule()
 
     def _maybe_send_weekly_summary(self, today: date, hour: int) -> None:
         """Send the weekly summary email if today is the configured summary day and hour."""

@@ -1,6 +1,6 @@
 """Tests for monitor.treatment_cycle."""
 
-from datetime import date
+from datetime import date, timedelta
 from monitor.treatment_cycle import TreatmentCycle
 
 
@@ -32,31 +32,55 @@ def test_covers_hour_outside_window() -> None:
 
 # --- is_due ---
 
-def test_is_due_returns_false_when_last_run_none() -> None:
+def test_is_due_returns_false_when_next_expected_none() -> None:
     c = _cycle(interval=3)
-    c.last_run_date = None
+    assert c.next_expected_date is None
     assert c.is_due(date(2026, 1, 10)) is False
 
 
-def test_is_due_returns_true_when_interval_reached() -> None:
+def test_is_due_returns_true_on_exact_expected_date() -> None:
     c = _cycle(interval=5)
-    c.last_run_date = date(2026, 1, 1)
+    c.next_expected_date = date(2026, 1, 6)
     assert c.is_due(date(2026, 1, 6)) is True
 
 
-def test_is_due_returns_true_when_interval_exceeded() -> None:
+def test_is_due_returns_false_day_before_expected() -> None:
     c = _cycle(interval=5)
-    c.last_run_date = date(2026, 1, 1)
-    assert c.is_due(date(2026, 1, 10)) is True
-
-
-def test_is_due_returns_false_before_interval() -> None:
-    c = _cycle(interval=5)
-    c.last_run_date = date(2026, 1, 1)
+    c.next_expected_date = date(2026, 1, 6)
     assert c.is_due(date(2026, 1, 5)) is False
 
 
-def test_is_due_returns_false_day_before() -> None:
+def test_is_due_returns_false_day_after_expected() -> None:
+    c = _cycle(interval=5)
+    c.next_expected_date = date(2026, 1, 6)
+    assert c.is_due(date(2026, 1, 7)) is False
+
+
+def test_is_due_returns_false_far_before_expected() -> None:
     c = _cycle(interval=14)
-    c.last_run_date = date(2026, 1, 1)
-    assert c.is_due(date(2026, 1, 14)) is False
+    c.next_expected_date = date(2026, 1, 15)
+    assert c.is_due(date(2026, 1, 1)) is False
+
+
+# --- advance_schedule ---
+
+def test_advance_schedule_increments_by_interval() -> None:
+    c = _cycle(interval=5)
+    c.next_expected_date = date(2026, 1, 6)
+    c.advance_schedule()
+    assert c.next_expected_date == date(2026, 1, 11)
+
+
+def test_advance_schedule_is_cumulative() -> None:
+    c = _cycle(interval=3)
+    c.next_expected_date = date(2026, 1, 1)
+    c.advance_schedule()
+    c.advance_schedule()
+    assert c.next_expected_date == date(2026, 1, 7)
+
+
+def test_advance_schedule_does_nothing_when_none() -> None:
+    c = _cycle(interval=5)
+    c.next_expected_date = None
+    c.advance_schedule()
+    assert c.next_expected_date is None
