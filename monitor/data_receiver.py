@@ -304,7 +304,7 @@ class DataReceiver:
         # (date, cycle_label) → cumulative pump-on minutes in that window on that date
         self._window_minutes: dict[tuple[date, str], float] = {}
         self._last_summary_week: int | None = None
-        self._sensor_status: str | None = None
+        self._battery: str | None = None
         self._sensor_status_logged_at: float = 0.0
         self._raw_packet_logged = False
 
@@ -347,7 +347,7 @@ class DataReceiver:
         return ts, watts
 
     def _log_sensor_status(self, xml: str) -> None:
-        """Log the clamp sensor's signal and battery fields when they change, or every 10 minutes.
+        """Log the clamp sensor's signal and battery fields when the battery changes, or every 10 minutes.
 
         The very first packet is also logged raw (truncated) so the available fields are visible.
         """
@@ -356,9 +356,11 @@ class DataReceiver:
             logger.info(f'First packet received (raw): {xml[:1000]!r}')
         tags = re.findall(r'<(?:signal|battery)\b[^>]*>', xml)
         status = ' '.join(tags) if tags else 'no signal/battery fields in packet'
+        battery = re.search(r'<battery\b[^>]*>', xml)
+        battery = battery.group(0) if battery else None
         now = time.time()
-        if status != self._sensor_status or now - self._sensor_status_logged_at >= 600:
-            self._sensor_status = status
+        if battery != self._battery or now - self._sensor_status_logged_at >= 600:
+            self._battery = battery
             self._sensor_status_logged_at = now
             logger.info(f'Sensor status: {status}')
 
