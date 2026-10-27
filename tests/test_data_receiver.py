@@ -371,3 +371,15 @@ def test_receive_data_continues_after_exception(receiver: DataReceiver) -> None:
     receiver.db.get_last_run_date_in_window.return_value = None
     with pytest.raises(KeyboardInterrupt):
         receiver.receive_data()
+
+
+# --- _log_sensor_status ---
+
+def test_log_sensor_status_logs_raw_packet_and_battery(receiver, caplog):
+    xml = "<electricity><signal rssi='-70' lqi='40'/><battery level='20%'/></electricity>"
+    with caplog.at_level('INFO'):
+        receiver._log_sensor_status(xml)
+        receiver._log_sensor_status(xml)
+    assert "<battery level='20%'>" in caplog.text or "level='20%'" in caplog.text
+    assert caplog.text.count('Sensor status') == 1
+    assert caplog.text.count('First packet received') == 1

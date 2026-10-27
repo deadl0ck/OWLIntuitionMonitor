@@ -270,3 +270,15 @@ Included SQL helpers:
 ./scripts/show_last_20_rows.sh   # Last 20 readings
 ./scripts/show_pump_on.sh        # Readings where pump was on
 ```
+
+## Known issue: OWL data gaps (suspected low clamp batteries)
+
+The OWL often goes silent for minutes to hours, and during long "runs" readings can be very sparse
+(2026-10-27: 34 readings over 5.7 h, gaps up to 82 min). The monitor assumes the pump stays in its
+last known state through a gap, so a gappy run can show as one long run (false "unexpected run" or
+"missed treatment" alerts).
+
+Suspected cause: low batteries in the wireless clamp unit, giving an unreliable sensor link.
+To check: replace the clamp batteries and see if readings return to every 12–60 s. The monitor now
+logs the first raw packet and any `<signal>`/`<battery>` fields (`Sensor status:` lines in the
+journal), if the OWL sends them.
