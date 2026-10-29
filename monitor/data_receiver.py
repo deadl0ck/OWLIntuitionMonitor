@@ -263,7 +263,8 @@ class DataReceiver:
                  summary_day: int,
                  summary_hour_utc: int,
                  unexpected_alert_threshold: float,
-                 send_confirmation_emails: bool = False) -> None:
+                 send_confirmation_emails: bool = False,
+                 max_gap_minutes: float = 10.0) -> None:
         """Bind a UDP socket and join the multicast group.
 
         Args:
@@ -296,6 +297,7 @@ class DataReceiver:
         self.summary_hour_utc = summary_hour_utc
         self.unexpected_alert_threshold = unexpected_alert_threshold
         self.send_confirmation_emails = send_confirmation_emails
+        self.max_gap_minutes = max_gap_minutes
 
         self._pump_on = False
         self._pump_state_change_ts: float = time.time()
@@ -307,6 +309,9 @@ class DataReceiver:
         self._battery: str | None = None
         self._sensor_status_logged_at: float = 0.0
         self._raw_packet_logged = False
+        self._last_reading_ts: int | None = None
+        # (last_ts_before_gap, first_ts_after_gap) for recent silences longer than max_gap_minutes
+        self._gaps: list[tuple[int, int]] = []
 
     def _init_cycle_last_runs(self) -> None:
         """Seed each cycle's last_run_date and next_expected_date from the database on startup."""
@@ -364,6 +369,31 @@ class DataReceiver:
             self._sensor_status_logged_at = now
             logger.info(f'Sensor status: {status}')
 
+    def _note_gap(self, unix_ts: int) -> bool:
+        """Record a data gap if this reading follows a silence longer than max_gap_minutes.
+
+        Returns:
+            True if a gap was detected before this reading.
+        """
+        previous_ts = self._last_reading_ts
+        self._last_reading_ts = unix_ts
+        if previous_ts is None or (unix_ts - previous_ts) / 60 <= self.max_gap_minutes:
+            return False
+        cutoff = unix_ts - 3 * 86400
+        self._gaps = [g for g in self._gaps if g[1] > cutoff] + [(previous_ts, unix_ts)]
+        logger.warning(
+            f'No data for {(unix_ts - previous_ts) / 60:.1f} min — pump state during the gap '
+            f'is unknown, so any run spanning it is not trusted'
+        )
+        return True
+
+    def _window_has_gap(self, on_date: date, cycle: TreatmentCycle) -> bool:
+        """Return True if a recorded data gap overlaps the cycle's window on on_date."""
+        midnight = datetime(on_date.year, on_date.month, on_date.day, tzinfo=timezone.utc)
+        window_start = (midnight + timedelta(hours=cycle.utc_start_hour)).timestamp()
+        window_end = (midnight + timedelta(hours=cycle.utc_end_hour)).timestamp()
+        return any(start < window_end and end > window_start for start, end in self._gaps)
+
     def _process_reading(self, unix_ts: int, watts: float) -> None:
         """Update pump state, persist the reading and check treatment schedules.
 
@@ -381,12 +411,17 @@ class DataReceiver:
         reading_date = reading_dt.date()
         reading_hour = reading_dt.hour
 
-        pump_already_on = self._pump_on
+        was_on = self._pump_on
+        gap_hit = self._note_gap(unix_ts)
+        # A run that spans a data gap has an unknown end, so don't carry it across
+        pump_already_on = was_on and not gap_hit
         self._pump_on = watts > self.pump_threshold_watts
         pump_off = not self._pump_on
         duration = (unix_ts - self._pump_state_change_ts) / 60
 
         self.db.insert_reading(unix_ts, date_time, watts, self._pump_on, duration)
+        if gap_hit and was_on:
+            self._pump_state_change_ts = unix_ts
 
         # Day rollover — check missed treatments for the day that just ended
         if self._current_date is not None and reading_date > self._current_date:
@@ -448,7 +483,20 @@ class DataReceiver:
             if not cycle.is_due(prev_date):
                 continue
             minutes = self._window_minutes.get((prev_date, cycle.label), 0.0)
-            if minutes < cycle.min_duration_minutes:
+            if minutes < cycle.min_duration_minutes and self._window_has_gap(prev_date, cycle):
+                self.email.send(
+                    self.email_receiver,
+                    f'PUMPHOUSE: Could not verify {cycle.label} treatment on {prev_date}',
+                    f'No data was received for part of the {cycle.label} window on {prev_date}, '
+                    f'so a missed treatment cannot be confirmed.\n'
+                    f'Pump activity seen in window: {minutes:.1f} min '
+                    f'(minimum expected: {cycle.min_duration_minutes} min).',
+                )
+                logger.warning(
+                    f'{cycle.label} on {prev_date} not verified — data gap overlaps window '
+                    f'({minutes:.1f} min seen)'
+                )
+            elif minutes < cycle.min_duration_minutes:
                 self.email.send(
                     self.email_receiver,
                     f'PUMPHOUSE: Missed {cycle.label} treatment on {prev_date}',

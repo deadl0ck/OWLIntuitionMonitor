@@ -383,3 +383,42 @@ def test_log_sensor_status_logs_raw_packet_and_battery(receiver, caplog):
     assert "<battery level='20%'>" in caplog.text or "level='20%'" in caplog.text
     assert caplog.text.count('Sensor status') == 1
     assert caplog.text.count('First packet received') == 1
+
+
+# --- data gap guard ---
+
+def test_run_spanning_gap_no_unexpected_alert(receiver: DataReceiver) -> None:
+    """Verify that a run with a data gap in the middle is not reported as one long unexpected run."""
+    from datetime import datetime, timezone
+    start = int(datetime(2026, 2, 2, 10, 0, 0, tzinfo=timezone.utc).timestamp())
+    receiver._process_reading(start, 2000.0)
+    receiver._process_reading(start + 6 * 3600, 50.0)  # 6 h later, pump now off
+    receiver.email.send.assert_not_called()
+    assert len(receiver._gaps) == 1
+
+
+def test_missed_treatment_in_gap_sends_unverified_not_missed(receiver: DataReceiver) -> None:
+    """Verify that a window overlapping a data gap gives a 'could not verify' email, not 'Missed'."""
+    from datetime import datetime, timezone
+    cycle = _make_cycle(label='5-night', interval=5, start_h=2, end_h=4, min_dur=3.0,
+                        next_expected=date(2026, 1, 6))
+    receiver.cycles = [cycle]
+    gap_start = int(datetime(2026, 1, 6, 1, 0, 0, tzinfo=timezone.utc).timestamp())
+    receiver._gaps = [(gap_start, gap_start + 5 * 3600)]
+    receiver._check_missed_treatments(date(2026, 1, 6))
+    receiver.email.send.assert_called_once()
+    subject = receiver.email.send.call_args[0][1]
+    assert 'Could not verify' in subject and 'Missed' not in subject
+    assert cycle.next_expected_date == date(2026, 1, 11)
+
+
+def test_missed_treatment_with_gap_outside_window_still_alerts(receiver: DataReceiver) -> None:
+    """Verify that a gap outside the window does not suppress a genuine missed alert."""
+    from datetime import datetime, timezone
+    cycle = _make_cycle(label='5-night', interval=5, start_h=2, end_h=4, min_dur=3.0,
+                        next_expected=date(2026, 1, 6))
+    receiver.cycles = [cycle]
+    gap_start = int(datetime(2026, 1, 6, 8, 0, 0, tzinfo=timezone.utc).timestamp())
+    receiver._gaps = [(gap_start, gap_start + 3600)]
+    receiver._check_missed_treatments(date(2026, 1, 6))
+    assert 'Missed' in receiver.email.send.call_args[0][1]
