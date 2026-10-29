@@ -12,6 +12,7 @@ Stores all readings in a local SQLite database (`pumphouse.db`).
 - Systemd service: `pumphouse-monitor.service`, runs as user `martin`
 - Python venv at `.venv/`, secrets in `.env` (gitignored)
 - Logs: `sudo journalctl -u pumphouse-monitor.service -f`
+- OWL Network OWL: 192.168.1.122 (DHCP reservation on router), MAC 44:37:19:00:3e:69. No local web UI; multicast 224.192.32.19:22600
 
 ## Key config (config.ini)
 
