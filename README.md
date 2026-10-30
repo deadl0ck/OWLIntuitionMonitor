@@ -271,14 +271,31 @@ Included SQL helpers:
 ./scripts/show_pump_on.sh        # Readings where pump was on
 ```
 
-## Known issue: OWL data gaps (suspected low clamp batteries)
+## Known issue: OWL outage (Oct 2026)
 
-The OWL often goes silent for minutes to hours, and during long "runs" readings can be very sparse
-(2026-10-27: 34 readings over 5.7 h, gaps up to 82 min). The monitor assumes the pump stays in its
-last known state through a gap, so a gappy run can show as one long run (false "unexpected run" or
-"missed treatment" alerts).
+**Devices:** clamp sensor → wireless transmitter (2×AA, Check button, CMR180-type) at the pumphouse → Network OWL
+(TSE200-002, MAC 443719003E69, 192.168.1.122, Ethernet at the house) → multicast 224.192.32.19:22600 → this Pi.
 
-Suspected cause: low batteries in the wireless clamp unit, giving an unreliable sensor link.
-To check: replace the clamp batteries and see if readings return to every 12–60 s. The monitor now
-logs the first raw packet and any `<signal>`/`<battery>` fields (`Sensor status:` lines in the
-journal), if the OWL sends them.
+**Status:** no readings since 2026-10-28 12:37 UTC. The Network OWL is online but unpaired.
+
+**Cause:** transmitter battery was at 10% (signal strong), causing silences and sparse readings. Changing the
+batteries dropped the pairing and the Network OWL was factory-reset. OWL support (R. Brown) initially said pairing
+is done in the web dashboard and needs an active subscription (expired 2025-04-14). Subscription was since renewed
+(30 Oct 2026) — pairing still fails, so the subscription wasn't the whole story. The transmitter itself is fine
+(red LED flashes after ~10 s on Check). The multicast feed is undocumented by OWL.
+
+**Packet capture (30 Oct 2026):** used a spare Pi (RPi4-3, normally powered off) bridged between the Network OWL
+and the router to capture its traffic to OWL's servers during pairing attempts. Findings: the Network OWL
+reconnects and completes its TLS handshake cleanly on every power cycle, sends a steady 30 s keepalive, and
+receives data back (unencrypted weather broadcasts on the local multicast feed confirm this). No TCP resets or
+drops. So the device's connection to OWL's cloud looks healthy — the fault looks to be in the pairing step itself
+(device- or account-side), not the network path. Sent these findings (reconnect timestamps, handshake detail) to
+OWL support, asking them to check server-side logs for MAC 443719003E69 at those times. Awaiting reply.
+
+**Done:** GMT cycles; signal/battery logging (`Sensor status:` in the journal); data-gap guard
+(`max_gap_minutes` in `config.ini`: runs spanning a gap are ignored, affected windows give a
+"Could not verify" email instead of "Missed").
+
+**Open:** awaiting OWL support's answer on the capture findings above. Fallback: switch to a local Tuya WiFi
+CT meter (no subscription dependency). Also pending: battery-level alert (every battery change drops the
+pairing) and a no-data watchdog email.
