@@ -33,6 +33,9 @@ EMAIL_RECEIVER = config.get('email', 'receiver')
 PUMP_THRESHOLD_WATTS = config.getfloat('monitor', 'pump_threshold_watts')
 UNEXPECTED_ALERT_THRESHOLD = config.getfloat('monitor', 'unexpected_alert_threshold_minutes')
 MAX_GAP_MINUTES = config.getfloat('monitor', 'max_gap_minutes', fallback=10.0)
+BATTERY_ALERT_THRESHOLD_PERCENT = config.getfloat(
+    'monitor', 'battery_alert_threshold_percent', fallback=30.0
+)
 
 _WEEKDAYS = {
     'Monday': 0, 'Tuesday': 1, 'Wednesday': 2, 'Thursday': 3,
@@ -69,6 +72,7 @@ receiver = DataReceiver(
     unexpected_alert_threshold=UNEXPECTED_ALERT_THRESHOLD,
     send_confirmation_emails=SEND_CONFIRMATION_EMAILS,
     max_gap_minutes=MAX_GAP_MINUTES,
+    battery_alert_threshold_percent=BATTERY_ALERT_THRESHOLD_PERCENT,
 )
 
 receiver.receive_data()

@@ -18,6 +18,8 @@ Stores all readings in a local SQLite database (`pumphouse.db`).
 
 - `pump_threshold_watts = 1000` — watts above which pump is considered on
 - `unexpected_alert_threshold_minutes = 7`
+- `max_gap_minutes = 10` — silence longer than this counts as a data gap (ignored runs, "could not verify" missed-treatment emails)
+- `battery_alert_threshold_percent = 30` — emails once when the transmitter battery drops to/below this; replacing batteries drops the Network OWL pairing, so re-pairing is needed each time
 - Current treatment cycles (GMT, UTC+0, late Oct–late Mar; pumps reset to GMT on 2026-10-26):
   ```
   cycles = 14,1,2,15,14-night | 5,2,4,3,5-night | 3,4,5,8,3-night

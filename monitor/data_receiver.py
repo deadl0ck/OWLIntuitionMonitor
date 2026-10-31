@@ -264,7 +264,8 @@ class DataReceiver:
                  summary_hour_utc: int,
                  unexpected_alert_threshold: float,
                  send_confirmation_emails: bool = False,
-                 max_gap_minutes: float = 10.0) -> None:
+                 max_gap_minutes: float = 10.0,
+                 battery_alert_threshold_percent: float = 30.0) -> None:
         """Bind a UDP socket and join the multicast group.
 
         Args:
@@ -281,6 +282,9 @@ class DataReceiver:
             send_confirmation_emails: When True, send an info email each time a scheduled
                 treatment is confirmed. Configurable so it can be disabled once the
                 schedule is verified.
+            max_gap_minutes: Silence longer than this counts as a data gap.
+            battery_alert_threshold_percent: Email once when the sensor's reported
+                battery level drops to or below this percentage.
         """
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind(('', port))
@@ -298,6 +302,7 @@ class DataReceiver:
         self.unexpected_alert_threshold = unexpected_alert_threshold
         self.send_confirmation_emails = send_confirmation_emails
         self.max_gap_minutes = max_gap_minutes
+        self.battery_alert_threshold_percent = battery_alert_threshold_percent
 
         self._pump_on = False
         self._pump_state_change_ts: float = time.time()
@@ -307,6 +312,7 @@ class DataReceiver:
         self._window_minutes: dict[tuple[date, str], float] = {}
         self._last_summary_week: int | None = None
         self._battery: str | None = None
+        self._battery_alert_sent = False
         self._sensor_status_logged_at: float = 0.0
         self._raw_packet_logged = False
         self._last_reading_ts: int | None = None
@@ -368,6 +374,34 @@ class DataReceiver:
             self._battery = battery
             self._sensor_status_logged_at = now
             logger.info(f'Sensor status: {status}')
+        self._check_battery_level(battery)
+
+    def _check_battery_level(self, battery_tag: str | None) -> None:
+        """Email once when the battery level drops to or below the configured threshold.
+
+        The alert resets (so it can fire again) once the level rises back above the
+        threshold, e.g. after the batteries are replaced.
+        """
+        if battery_tag is None:
+            return
+        match = re.search(r"level='(\d+(?:\.\d+)?)%'", battery_tag)
+        if match is None:
+            return
+        percent = float(match.group(1))
+        if percent <= self.battery_alert_threshold_percent:
+            if not self._battery_alert_sent:
+                self._battery_alert_sent = True
+                self.email.send(
+                    self.email_receiver,
+                    f'PUMPHOUSE: Transmitter battery low ({percent:.0f}%)',
+                    f'The clamp transmitter battery is at {percent:.0f}%, at or below the '
+                    f'{self.battery_alert_threshold_percent:.0f}% alert threshold.\n'
+                    f'Replace the batteries soon — note that changing them will drop the '
+                    f'pairing with the Network OWL and it will need re-pairing afterwards.',
+                )
+                logger.warning(f'Transmitter battery low: {percent:.0f}%')
+        else:
+            self._battery_alert_sent = False
 
     def _note_gap(self, unix_ts: int) -> bool:
         """Record a data gap if this reading follows a silence longer than max_gap_minutes.

@@ -422,3 +422,39 @@ def test_missed_treatment_with_gap_outside_window_still_alerts(receiver: DataRec
     receiver._gaps = [(gap_start, gap_start + 3600)]
     receiver._check_missed_treatments(date(2026, 1, 6))
     assert 'Missed' in receiver.email.send.call_args[0][1]
+
+
+# --- battery alert ---
+
+def test_battery_alert_sent_once_at_or_below_threshold(receiver: DataReceiver) -> None:
+    """Verify a low-battery email is sent once when the level drops to the threshold."""
+    receiver.battery_alert_threshold_percent = 30.0
+    receiver._check_battery_level("<battery level='30%'/>")
+    receiver.email.send.assert_called_once()
+    subject = receiver.email.send.call_args[0][1]
+    assert 'battery' in subject.lower() and '30' in subject
+    receiver._check_battery_level("<battery level='29%'/>")
+    receiver.email.send.assert_called_once()  # still just once
+
+
+def test_battery_alert_above_threshold_no_alert(receiver: DataReceiver) -> None:
+    """Verify no alert when the battery is above the threshold."""
+    receiver.battery_alert_threshold_percent = 30.0
+    receiver._check_battery_level("<battery level='45%'/>")
+    receiver.email.send.assert_not_called()
+
+
+def test_battery_alert_resets_after_recovery(receiver: DataReceiver) -> None:
+    """Verify the alert can fire again after the battery rises above threshold then drops again."""
+    receiver.battery_alert_threshold_percent = 30.0
+    receiver._check_battery_level("<battery level='10%'/>")
+    receiver.email.send.assert_called_once()
+    receiver._check_battery_level("<battery level='100%'/>")  # batteries replaced
+    receiver._check_battery_level("<battery level='25%'/>")
+    assert receiver.email.send.call_count == 2
+
+
+def test_battery_alert_no_battery_tag_no_alert(receiver: DataReceiver) -> None:
+    """Verify a missing battery tag doesn't raise or alert."""
+    receiver._check_battery_level(None)
+    receiver.email.send.assert_not_called()
