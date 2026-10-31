@@ -299,3 +299,13 @@ OWL support, asking them to check server-side logs for MAC 443719003E69 at those
 **Open:** awaiting OWL support's answer on the capture findings above. Fallback: switch to a local Tuya WiFi
 CT meter (no subscription dependency). Also pending: battery-level alert (every battery change drops the
 pairing) and a no-data watchdog email.
+
+**Update 2026-10-31:** created a new OWL Intuition account (not a renewal of the old one) for the same
+Network OWL (MAC 443719003e69), username `deadlock_eire`. Also confirmed, from OWL's own published
+[Multicast & UDP API article](https://theowl.zendesk.com/hc/en-gb/articles/201284603-Multicast-UDP-API-Information):
+- The Network OWL accepts configuration commands on **UDP port 5100**; each command is suffixed with the
+  device's own **UDP Key**, read from the dashboard under Settings → Advanced Settings → Setup Data Push.
+  (If you need this locally, put it in `.env` — never commit a device key to the repo.)
+- The local multicast feed (224.192.32.19:22600) does **not** depend on subscription status — borne out by
+  this project's own history: it kept working for ~18 months after the original subscription lapsed.
+- In the pairing wizard, a TSE200-series transmitter is selected as "CMR180i/CMR300".
