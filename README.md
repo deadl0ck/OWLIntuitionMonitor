@@ -275,6 +275,7 @@ Included SQL helpers:
 
 **Devices:** clamp sensor → wireless transmitter (2×AA, Check button, CMR180-type) at the pumphouse → Network OWL
 (TSE200-002, MAC 443719003E69, 192.168.1.122, Ethernet at the house) → multicast 224.192.32.19:22600 → this Pi.
+Pumphouse AccessPoint: 192.168.1.128, MAC 4E:22:54:2B:49:22.
 
 **Status:** readings resumed 2026-10-31 18:57 UTC, after pairing succeeded under a newly created OWL account
 (see "Update 2026-10-31" below). Kept here as a record in case of a repeat — a battery alert is now in place
