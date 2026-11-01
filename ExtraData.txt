@@ -1,0 +1,106 @@
+OWL Intuition Network OWL – Complete Local Pairing & Control Guide
+Goal
+
+Pair an electricity transmitter (TSE200 series) to a Network OWL and run it fully locally via multicast, without paying for a cloud subscription.
+Background
+
+    MAC ID: 443719003e69
+    Subscription expired 14/4/2025 → dashboard locked with a modal alert.
+    Modern firmware no longer enters pairing mode by power-cycling; the online wizard (or UDP SCAN command) is required.
+    The Network OWL listens on UDP port 5100. Every command must end with the unit’s unique UDP Key (uppercase).
+    Once paired, live XML data is multicast locally on 224.192.32.19:22600 regardless of subscription status.
+
+UDP Key
+
+AB79341
+Step-by-step: Bypassing the subscription alert modal
+
+    Create a new account at owlintuition.com using the same MAC ID. Log in. The unit comes online, but the subscription alert modal blocks everything.
+
+    Enable pasting in the browser console (Chrome anti-self-XSS protection):
+        Open DevTools (F12 or Ctrl+Shift+I / Cmd+Option+I).
+        Go to the Console tab.
+        When you try to paste and see the warning, type exactly:
+
+        allow pasting
+
+        and press Enter. (Do not put quotes around it.)
+
+    Remove the alert modal and blocking overlays
+    Paste the following into the Console and press Enter. It removes the alert immediately and keeps suppressing it:
+    js
+
+    const kill = () => {
+      // Remove the subscription alert
+      document.querySelectorAll('div, span, table, tr, td').forEach(el => {
+        if (el.innerText && el.innerText.includes('subscription for MAC ID')) {
+          el.remove();
+        }
+      });
+
+      // Remove leftover "Alert" title bars
+      document.querySelectorAll('*').forEach(el => {
+        if (el.childNodes.length <= 1 && el.textContent && el.textContent.trim() === 'Alert') {
+          el.remove();
+          if (el.parentElement && el.parentElement.textContent.trim() === 'Alert') {
+            el.parentElement.remove();
+          }
+        }
+      });
+
+      // Remove modal backdrops / overlays
+      document.querySelectorAll('.modal-backdrop, .overlay, .popup-overlay, .ui-widget-overlay, .blockUI, [class*="backdrop"], [class*="overlay"]').forEach(el => el.remove());
+
+      // Remove large fixed/absolute blockers
+      [...document.querySelectorAll('div')].forEach(el => {
+        const s = window.getComputedStyle(el);
+        if ((s.position === 'fixed' || s.position === 'absolute') &&
+            parseInt(s.zIndex || 0) > 50 &&
+            el.offsetWidth > window.innerWidth * 0.7) {
+          el.remove();
+        }
+      });
+
+      // Ensure the page is clickable
+      document.body.style.pointerEvents = 'auto';
+      document.body.style.overflow = 'auto';
+    };
+
+    kill();
+    setInterval(kill, 300);   // keep suppressing the alert
+
+    Retrieve the UDP Key
+    With the modal gone, go to Settings → Advanced Settings → Setup Data Push and copy the UDP Key (AB79341).
+    Transmitter type in the wizard
+    For a TSE200 series transmitter select CMR180i/CMR300.
+
+How to force pairing mode with the UDP Key
+
+Send a single UDP packet to the Network OWL’s local IP on port 5100.
+
+Command:
+
+SCAN,180,AB79341
+
+(Use SCAN,AB79341 to scan for any device type.)
+
+Python example:
+python
+
+import socket
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock.sendto(b"SCAN,180,AB79341", ("192.168.1.XX", 5100))  # replace with the OWL’s IP
+
+While it is scanning:
+
+    Press the Check button in the transmitter’s battery compartment until the red LED starts flashing (every ~2 s for ~30 s).
+    The Network OWL’s blue LED should flash in response if pairing succeeds.
+    After pairing the blue LED flashes periodically (every 12–60 s) when data is received.
+
+After pairing
+
+    Live data appears on multicast 224.192.32.19:22600 (XML).
+    No further cloud access or subscription is needed.
+    All other configuration commands work the same way — append ,AB79341 and send to port 5100.
+
+Keep the UDP key safe. It is the only credential required for full local control of the Network OWL.
