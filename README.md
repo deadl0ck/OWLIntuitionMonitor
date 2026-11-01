@@ -271,12 +271,14 @@ Included SQL helpers:
 ./scripts/show_pump_on.sh        # Readings where pump was on
 ```
 
-## Known issue: OWL outage (Oct 2026)
+## Known issue: OWL outage (Oct 2026) — RESOLVED 2026-10-31
 
 **Devices:** clamp sensor → wireless transmitter (2×AA, Check button, CMR180-type) at the pumphouse → Network OWL
 (TSE200-002, MAC 443719003E69, 192.168.1.122, Ethernet at the house) → multicast 224.192.32.19:22600 → this Pi.
 
-**Status:** no readings since 2026-10-28 12:37 UTC. The Network OWL is online but unpaired.
+**Status:** readings resumed 2026-10-31 18:57 UTC, after pairing succeeded under a newly created OWL account
+(see "Update 2026-10-31" below). Kept here as a record in case of a repeat — a battery alert is now in place
+to catch low batteries before they cause another pairing loss (see `battery_alert_threshold_percent` below).
 
 **Cause:** transmitter battery was at 10% (signal strong), causing silences and sparse readings. Changing the
 batteries dropped the pairing and the Network OWL was factory-reset. OWL support (R. Brown) initially said pairing
@@ -296,9 +298,9 @@ OWL support, asking them to check server-side logs for MAC 443719003E69 at those
 (`max_gap_minutes` in `config.ini`: runs spanning a gap are ignored, affected windows give a
 "Could not verify" email instead of "Missed").
 
-**Open:** awaiting OWL support's answer on the capture findings above. Fallback: switch to a local Tuya WiFi
-CT meter (no subscription dependency). Also pending: battery-level alert (every battery change drops the
-pairing) and a no-data watchdog email.
+**Open:** OWL support may still reply about the capture findings — no action needed unless they do. A
+no-data watchdog email (alerting *during* a silence, not just after) is still just an idea, not built.
+Fallback if this recurs badly: a local Tuya WiFi CT meter (no subscription dependency).
 
 **Update 2026-10-31:** created a new OWL Intuition account (not a renewal of the old one) for the same
 Network OWL (MAC 443719003e69), username `deadlock_eire`. Also confirmed, from OWL's own published
